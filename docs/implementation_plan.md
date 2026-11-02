@@ -168,12 +168,13 @@ scope and acceptance criteria remain in
   build output, and caches.
 - [x] Create one parentless snapshot commit authored with the user's configured
   Git identity and no co-author trailer.
-- [ ] Commit the remaining authenticated story workflow, Supabase migration,
+- [x] Commit the creator approval workflow, Supabase migration,
   frontend configuration handling, and verification documentation using the
   user's configured Git identity without a co-author trailer.
-- [ ] Push the new commit to `https://github.com/Susant07-star/ClipCraft`
-  with a normal fast-forward push; do not rewrite remote history.
-- [ ] Verify GitHub `main` contains the new commit and the worktree is clean.
+- [x] Push commit `c990233` to
+  `https://github.com/Susant07-star/ClipCraft` `main` with a normal
+  fast-forward push and no co-author trailer; remote history was not rewritten.
+- [x] Verify GitHub `main` contains the pushed commit and the worktree is clean.
 
 ## Suggested execution order
 
