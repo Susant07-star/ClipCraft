@@ -2,8 +2,10 @@
 
 import { useState, useRef, useEffect } from "react";
 import { fixPrompt, copyToClipboard } from "@/lib/api";
+import type { VideoClip } from "@/lib/types";
 
 interface ChatboxProps {
+  accessToken: string;
   packageId: string | null;
   onClose: () => void;
 }
@@ -11,10 +13,10 @@ interface ChatboxProps {
 interface Message {
   role: "user" | "assistant";
   content: string;
-  fixedClip?: any;
+  fixedClip?: VideoClip;
 }
 
-export default function Chatbox({ packageId, onClose }: ChatboxProps) {
+export default function Chatbox({ accessToken, packageId, onClose }: ChatboxProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
@@ -45,7 +47,7 @@ export default function Chatbox({ packageId, onClose }: ChatboxProps) {
       const clipMatch = userMessage.match(/clip\s*#?\s*(\d+)|prompt\s*#?\s*(\d+)|(\d+)/i);
       const clipNumber = clipMatch ? parseInt(clipMatch[1] || clipMatch[2] || clipMatch[3]) : 1;
 
-      const result = await fixPrompt(packageId, clipNumber, userMessage);
+      const result = await fixPrompt(accessToken, packageId, clipNumber, userMessage);
       const fixedClip = result.fixed_clip;
 
       setMessages((prev) => [
@@ -66,7 +68,7 @@ export default function Chatbox({ packageId, onClose }: ChatboxProps) {
     }
   };
 
-  const handleCopy = (clip: any, idx: number) => {
+  const handleCopy = (clip: VideoClip, idx: number) => {
     copyToClipboard(
       `[VISUAL]: ${clip.visual}\n\n[CHARACTER VOICE]: ${clip.character_voice}\n\n[BACKGROUND MUSIC]: ${clip.background_music}\n\n[SOUND EFFECTS]: ${clip.sound_effects}`
     );
@@ -76,10 +78,10 @@ export default function Chatbox({ packageId, onClose }: ChatboxProps) {
 
   return (
     <div
-      className="fixed bottom-6 right-6 z-50 flex flex-col rounded-2xl shadow-2xl"
+      className="fixed bottom-4 right-4 z-50 flex flex-col rounded-2xl shadow-2xl md:bottom-6 md:right-6"
       style={{
-        width: "420px",
-        height: "560px",
+        width: "min(420px, calc(100vw - 2rem))",
+        height: "min(560px, calc(100dvh - 2rem))",
         background: "#12121a",
         border: "1px solid #2a2a3d",
         boxShadow: "0 0 40px rgba(124,58,237,0.2)",
@@ -126,7 +128,7 @@ export default function Chatbox({ packageId, onClose }: ChatboxProps) {
               {/* Fixed clip display */}
               {msg.fixedClip && (
                 <div className="mt-3 space-y-2 text-xs">
-                  {msg.fixedClip.characters_to_attach?.length > 0 && (
+                  {msg.fixedClip.characters_to_attach && msg.fixedClip.characters_to_attach.length > 0 && (
                     <div style={{ color: "#fbbf24" }}>📎 Attach: {msg.fixedClip.characters_to_attach.join(", ")}</div>
                   )}
                   {[
@@ -141,7 +143,10 @@ export default function Chatbox({ packageId, onClose }: ChatboxProps) {
                     </div>
                   ))}
                   <button
-                    onClick={() => handleCopy(msg.fixedClip, i)}
+                    onClick={() => {
+                      const clip = msg.fixedClip;
+                      if (clip) handleCopy(clip, i);
+                    }}
                     className="copy-btn w-full mt-1 text-center"
                   >
                     {copied === i ? "✓ Copied!" : "Copy Full Prompt"}

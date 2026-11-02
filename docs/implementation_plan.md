@@ -32,8 +32,49 @@ scope and acceptance criteria remain in
   local `.env` files are ignored and must not be committed.
 - [x] Created a parentless, single-commit project snapshot locally for the
   clean-history GitHub publish. It has not yet been pushed.
+- [x] Aligned the review counter with the maximum of three actual AI review
+  passes per story version; tests cover the cap and manual-review handoff.
+- [x] Split story generation/review from production generation. The story
+  graph now ends at creator review, and the production graph rejects
+  unapproved state.
+- [x] Added the creator story workshop with editable versions, natural-language
+  rewrite requests, review feedback/counts, explicit approval, and asset
+  invalidation after edits.
+- [x] Added automatic Supabase guest sessions, verified bearer-token API
+  access, owner-filtered history reads, and per-request RLS-scoped persistence.
+- [x] Extended `supabase/schema.sql` with workflow/version storage and
+  owner-scoped select/insert/update/delete policies; updates check ownership
+  before and after the write.
+- [x] Added backend tests for the approval boundary, asset invalidation,
+  review-cycle reset, AI-versus-creator approval, restart recovery, and
+  unauthenticated API rejection.
 
 ## Partial — finish or verify
+
+- [~] **Supabase deployment:** the local frontend environment was populated
+  from the existing backend Supabase configuration without printing values.
+  The Next.js app now has its Supabase browser config and automatically opens
+  a guest session instead of requiring a login. Created and pushed
+  `supabase/migrations/20261102010708_auth_owner_scoped_workflow_state.sql`
+  through the Supabase CLI to the active ClipCraft project. CLI migration
+  history confirms the remote migration is current. A live catalog query
+  confirms RLS is enabled and forced, `anon` has no SELECT privilege, and
+  authenticated access is restricted by owner-scoped policies including both
+  UPDATE `USING` and `WITH CHECK`. Existing rows without `user_id` remain
+  inaccessible; assign ownership only if their owner is known.
+- [x] **Guest access:** the frontend now creates anonymous sessions without a
+  login screen. The linked project setting was enabled through Supabase CLI
+  after reviewing a diff limited to `auth.enable_anonymous_sign_ins`; a
+  follow-up config diff reports no remaining changes, and the local browser
+  opened the app with its guest session and history UI.
+- [~] **Guest signup abuse controls:** the current project uses Supabase's
+  anonymous sign-in rate limit. Configure a CAPTCHA provider before a public
+  production launch and monitor Auth usage.
+- [~] **Durable history live verification:** API code stores and reloads the
+  complete pending workflow state through Supabase. Migration application and
+  policy definitions are verified remotely; persistence across a real backend
+  restart and cross-user behavior using two anonymous user sessions remain to
+  be tested.
 
 - [~] **YouTube research:** the existing YouTube Data API researcher and local
   key are present. Verify a real query, source evidence/attribution, quota or
@@ -41,28 +82,26 @@ scope and acceptance criteria remain in
   as proof of trends or likely performance.
 - [~] **SEO:** the SEO agent and package output exist. Verify platform-specific
   metadata is grounded in the approved story and does not promise performance.
-- [~] **AI review loop:** an automatic LangGraph reviewer/writer loop exists.
-  Align its counters and configured limit with the documented maximum of
-  three AI review passes per submitted story version, and add tests for the
-  exact boundary and manual handoff.
 - [~] **Production kit:** character, clip, thumbnail-prompt, and SEO generators
-  exist in the current pipeline. They currently run after AI review rather
-  than after explicit creator approval.
+  now run only after creator approval. Duration-aware generation, per-stage
+  retry controls, image-provider states, and live provider verification remain.
 
 ## Remaining — required before the MVP demo
 
 ### P0 — Creator-controlled story workflow
 
-- [ ] Add a story workshop that shows the draft, review feedback, and review
+- [x] Add a story workshop that shows the draft, review feedback, and review
   count.
-- [ ] Let the creator directly edit the story or send a natural-language
+- [x] Let the creator directly edit the story or send a natural-language
   change request, then start a fresh bounded review cycle.
-- [ ] Add explicit **Approve story** and **Request changes** actions. Do not
+- [x] Add explicit **Approve story** and **Request changes** actions. Do not
   generate downstream assets just because the AI reviewer approves.
-- [ ] Persist and resume the pending creator decision across reloads or backend
-  restarts; do not rely on process-local job state as durable storage.
-- [ ] Preserve story versions and invalidate assets whenever their source story
-  changes.
+- [~] Persist and resume the pending creator decision across reloads or backend
+  restarts using the authenticated Supabase record. Mocked API tests cover
+  reopening a saved decision; live restart verification is blocked on applying
+  the schema.
+- [x] Preserve story versions and invalidate assets whenever their source
+  story changes.
 
 ### P0 — Creative inputs and approved assets
 
@@ -80,22 +119,24 @@ scope and acceptance criteria remain in
 
 ### P0 — Supabase authentication and private history
 
-- [ ] Replace the permissive `"Allow all"` policy in `supabase/schema.sql`.
-- [ ] Add Supabase Auth and an ownership field for every user-owned package.
-- [ ] Add owner-scoped RLS policies for select, insert, update, and delete.
-  Updates must prevent changing the owner ID.
-- [ ] Pass the authenticated user session through backend persistence and
-  history operations; the current anon-key client and open policy are not
-  sufficient for private user data.
-- [ ] Apply the reviewed schema/policies to the Supabase project and verify
-  users cannot read or modify another user's packages.
-- [ ] Add project history, reopen/resume, and truthful save failures. Never
-  report a package as saved if Supabase persistence failed.
+- [x] Replace the permissive `"Allow all"` policy in `supabase/schema.sql`.
+- [x] Add automatic Supabase guest sessions and an ownership field for
+  user-owned packages.
+- [x] Add owner-scoped RLS policies for select, insert, update, and delete.
+  Update checks prevent changing the owner ID.
+- [x] Pass the authenticated user session through backend persistence and
+  history operations.
+- [x] Push the reviewed migration through the Supabase CLI; verify remote
+  migration history, RLS enforcement, grants, and owner policy expressions.
+- [ ] Verify users cannot read or modify another user's packages using two
+  authenticated sessions.
+- [x] Add project history, reopen/resume, and truthful save failures. The
+  backend rejects a package save that returns no row.
 
 ### P0 — Mobile-first workflow UI
 
-- [ ] Build the brief, story workshop, approval actions, and production kit as
-  one clear phone-first flow.
+- [~] Build the story workshop and approval actions as a responsive flow;
+  the creative brief and final phone/tablet/desktop layout checks remain.
 - [ ] Verify layouts at 320 CSS px and common phone widths; fix horizontal
   overflow, touch targets, keyboard obstruction, and safe-area behavior.
 - [ ] Keep project history and primary actions reachable on small screens;
@@ -103,9 +144,12 @@ scope and acceptance criteria remain in
 
 ### P1 — Integration, quality, and demo readiness
 
-- [ ] Run focused backend and frontend checks after workflow changes. The last
-  reported frontend production build passed; lint had existing errors in
-  `Chatbox.tsx` and `Dashboard.tsx`.
+- [x] Run focused backend and frontend checks after workflow changes. All 17
+  backend tests pass in the configured project virtualenv; TypeScript, lint on
+  changed frontend files, and the production build pass.
+- [~] The system Python's test run is blocked by Windows Application Control
+  blocking the installed `xxhash` extension; the configured project virtualenv
+  avoids that environment issue and passes the suite.
 - [ ] With approval to consume API credits, make one small live Baseten request
   and record whether the configured model ID, endpoint, access, and response
   format work. Until then, treat provider access as mock-tested, not live
@@ -124,12 +168,12 @@ scope and acceptance criteria remain in
   build output, and caches.
 - [x] Create one parentless snapshot commit authored with the user's configured
   Git identity and no co-author trailer.
-- [ ] Push that snapshot to `https://github.com/Susant07-star/ClipCraft` using
-  a lease-checked history replacement. The remote still contains its current
-  initial commit until this push succeeds.
-- [ ] Verify GitHub `main` contains only the intended snapshot history and
-  that the worktree is clean. Do not force-push if the remote changed since
-  the last lease check.
+- [ ] Commit the remaining authenticated story workflow, Supabase migration,
+  frontend configuration handling, and verification documentation using the
+  user's configured Git identity without a co-author trailer.
+- [ ] Push the new commit to `https://github.com/Susant07-star/ClipCraft`
+  with a normal fast-forward push; do not rewrite remote history.
+- [ ] Verify GitHub `main` contains the new commit and the worktree is clean.
 
 ## Suggested execution order
 

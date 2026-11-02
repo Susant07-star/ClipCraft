@@ -5,6 +5,31 @@
 **Primary model:** Meta Muse Spark Open, hosted through Baseten
 **Human control:** The creator approves the story before production prompts are generated
 
+## Implementation update — 2026-11-02
+
+The story-review flow is implemented as two LangGraph boundaries: story
+generation/review ends at creator review, while character, video-tool,
+thumbnail, and SEO prompts run only in the separate production workflow after
+the creator approves. Creators can edit a script or request an AI rewrite; each
+submitted version starts a fresh three-pass review cycle, preserves prior
+versions, and clears assets tied to the previous version.
+An AI review pass is recorded separately from creator approval; an AI-approved
+script still waits for the creator action.
+
+Supabase guest sessions, bearer-token verification, owner-scoped API
+reads/writes, and workflow/version columns and RLS policies are implemented in
+the app and [`../supabase/schema.sql`](../supabase/schema.sql). The tracked
+migration
+[`../supabase/migrations/20261102010708_auth_owner_scoped_workflow_state.sql`](../supabase/migrations/20261102010708_auth_owner_scoped_workflow_state.sql)
+has been pushed to the active ClipCraft project and its migration history,
+grants, RLS flags, and owner policies were verified through the CLI. The linked
+project's anonymous sign-in setting was enabled through a reviewed CLI config
+push and verified with a clean follow-up diff. Guest sessions are tied to the
+browser and cannot be recovered if browser data is cleared or on another
+device. End-to-end cross-user isolation and durable restart behavior still
+need session tests. Legacy rows with no known owner remain inaccessible rather
+than being assigned speculatively.
+
 **Interface direction:** Mobile-first responsive web app
 
 ## 1. Product summary
@@ -178,7 +203,7 @@ Validate clip timings against the selected duration; ensure clips do not have ga
 
 ## 8. Supabase, authentication, and privacy
 
-Supabase is the planned authentication and persistence backend. The user will create a new project and provide its project URL and anon/publishable key later. Expected backend configuration is `SUPABASE_URL` and `SUPABASE_ANON_KEY`; keep the provided values out of source control, docs, logs, screenshots, and client-visible responses. Until those credentials are available, keep persistence disabled or clearly report that it is not configured; do not pretend a package was saved.
+Supabase is the authentication and persistence backend. The app starts a Supabase anonymous session automatically, so creators do not need to provide an email or password. Expected backend configuration is `SUPABASE_URL` and `SUPABASE_ANON_KEY`; the browser uses the project URL and publishable/anon key. Keep all keys out of source control, docs, logs, and screenshots; never expose a service-role key to the browser. Guest data is owner-scoped and private to the browser's anonymous user, but cannot be recovered on another device or after its browser data is cleared. Configure CAPTCHA and monitor Auth rate limits before a public production launch.
 
 ### Data to persist
 
@@ -191,7 +216,8 @@ Supabase is the planned authentication and persistence backend. The user will cr
 
 ### Required safeguards
 
-- Add Supabase Auth before treating saved histories as private user data.
+- Keep Supabase Auth enabled and verify saved histories remain private to the
+  anonymous user's owner ID under RLS.
 - Add an owner field such as `user_id` to every user-owned record.
 - Enable Row Level Security and policies that restrict select/insert/update/delete to `auth.uid() = user_id`.
 - Remove the existing permissive “Allow all” policy before deployment.
@@ -237,7 +263,8 @@ Design and implement the phone layout first, then enhance it for tablet and desk
 1. Generate character, clip, thumbnail-prompt, and SEO assets only after approval.
 2. Add explicit image-not-configured and video-prompt-only states.
 3. Validate model JSON and add per-step error/retry behavior.
-4. Connect Supabase after the user provides the new project URL and anon/publishable key; apply owner-scoped schema/RLS before private history is exposed.
+4. Configure Supabase guest sessions and apply owner-scoped schema/RLS before
+   private history is exposed.
 5. Test the complete short-form flow with mocked provider responses and one live Baseten smoke test.
 6. Prepare one labeled demo package/sample in case live model access or rate limits fail.
 
@@ -257,7 +284,8 @@ If time is short, defer live trend integrations and database-backed user history
 - Invalid/missing model output and provider errors are visible and retryable.
 - SEO copy is grounded in the selected topic/story and does not promise performance.
 - YouTube topic research uses the configured YouTube Data API key and displays its source evidence; research failures remain explicit and do not block creator-provided topics.
-- Supabase history is private to the authenticated owner under RLS before deployment.
+- Supabase history is private to the authenticated owner (including anonymous
+  guest users) under RLS before deployment.
 - A sample/fallback demo is clearly labeled and never represented as live generated research.
 - The core workflow is usable on a phone viewport without horizontal page scrolling; essential touch targets meet the 44×44 CSS-pixel minimum.
 

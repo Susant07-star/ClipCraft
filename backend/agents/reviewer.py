@@ -6,7 +6,7 @@ Acts as a dual-purpose quality gate:
      to prevent copyright/community guideline strikes.
 
 If the story fails either check, it sends it back to the Story Writer with specific feedback.
-Max revisions: 3 (to avoid infinite loops).
+After three review passes, an unapproved story is handed off for manual review.
 """
 
 import json
@@ -18,7 +18,7 @@ from utils.llm_manager import robust_llm_invoke
 
 load_dotenv()
 
-MAX_REVISIONS = 4
+MAX_REVIEW_PASSES = 3
 
 REVIEWER_SYSTEM_PROMPT = """You are a strict video content quality reviewer and platform policy expert.
 Your job is to evaluate a short-form video script (70-90 seconds) on two dimensions:
@@ -58,23 +58,23 @@ Rules for approval:
 
 def run_reviewer(state: dict) -> dict:
     """
-    LangGraph node: Reviews the story for virality and policy compliance.
-    Sets 'story_approved' to True/False and provides specific feedback.
+    LangGraph node: Reviews the story for editorial quality and policy concerns.
+    Counts review passes independently from story-writer runs.
     """
     story = state.get("story", "")
-    revision_count = state.get("revision_count", 0)
+    review_pass_count = state.get("review_pass_count", 0)
 
-    if revision_count >= MAX_REVISIONS:
-        print(f"⚠️  [Reviewer] Max revisions ({MAX_REVISIONS}) reached. Manual review required.")
+    if review_pass_count >= MAX_REVIEW_PASSES:
+        print(f"⚠️  [Reviewer] Max review passes ({MAX_REVIEW_PASSES}) reached. Manual review required.")
         return {
-            **state,
-            "story_approved": False,
+            "ai_review_approved": False,
             "manual_review_required": True,
-            "virality_score": 0,
-            "reviewer_feedback": "Maximum revision attempts reached; manual review is required.",
+            "review_pass_count": review_pass_count,
+            "reviewer_feedback": "Maximum AI review passes reached; manual review is required.",
         }
 
-    print(f"🔍 [Reviewer] Reviewing story (revision #{revision_count})...")
+    review_pass_count += 1
+    print(f"🔍 [Reviewer] Reviewing story (pass #{review_pass_count})...")
 
     messages = [
         SystemMessage(content=REVIEWER_SYSTEM_PROMPT),
@@ -107,21 +107,23 @@ def run_reviewer(state: dict) -> dict:
         approved = False
         feedback = state.get("duplication_feedback") or "The story is too similar to a previous package."
 
+    manual_review_required = not approved and review_pass_count >= MAX_REVIEW_PASSES
+
     if approved:
         print(f"✅ [Reviewer] Story APPROVED (Virality Score: {score}/10).")
         return {
-            **state,
-            "story_approved": True,
+            "ai_review_approved": True,
             "manual_review_required": False,
+            "review_pass_count": review_pass_count,
             "virality_score": int(score),
             "reviewer_feedback": None,
         }
 
     print(f"❌ [Reviewer] Story REJECTED (Score: {score}/10). Feedback: {feedback}")
     return {
-        **state,
-        "story_approved": False,
-        "manual_review_required": False,
+        "ai_review_approved": False,
+        "manual_review_required": manual_review_required,
+        "review_pass_count": review_pass_count,
         "virality_score": int(score) if isinstance(score, (int, float)) else 0,
         "reviewer_feedback": feedback,
     }

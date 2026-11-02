@@ -1,28 +1,39 @@
-"""
-FastAPI Application — ClipCraft Studio
-Exposes the LangGraph agent workflow as REST API endpoints
-consumed by the Next.js frontend dashboard.
-"""
+"""FastAPI endpoints for authenticated ClipCraft story and production workflows."""
 
-import uuid
-import traceback
-from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from dotenv import load_dotenv
 import os
+import traceback
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+import httpx
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
+from supabase_auth.errors import AuthApiError
 
 load_dotenv()
 
-from graph.workflow import run_pipeline_stream
 from agents.prompt_engineer import run_prompt_fix
-from database.supabase_client import save_video_package, get_all_packages, get_package_by_id
+from database.supabase_client import (
+    get_all_packages,
+    get_package_by_id,
+    save_video_package,
+    verify_access_token,
+)
+from graph.workflow import (
+    create_initial_state,
+    run_pipeline_stream,
+    run_production_stream,
+    run_story_review_stream,
+)
 
 app = FastAPI(
     title="ClipCraft Studio API",
-    description="LangGraph workflow for drafting and reviewing short-form video prompt packages.",
-    version="1.0.0",
+    description="Authenticated story review and creator-approved production workflows.",
+    version="1.1.0",
 )
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000").rstrip("/")
@@ -40,17 +51,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory job store (for async job status tracking)
-jobs: dict = {}
+bearer_scheme = HTTPBearer(auto_error=False)
+jobs: dict[str, dict[str, Any]] = {}
 
 
-# ─────────────────────────────────────────────
-# Request/Response Models
-# ─────────────────────────────────────────────
 class GenerateRequest(BaseModel):
     genre: str = "Funny"
-    language: str = "Auto"  # "Auto", "English", "Hindi", or "Nepali"
+    language: str = "Auto"
     video_style: str = "Hyper-Realistic"
+
+
+class StoryRevisionRequest(BaseModel):
+    story: str | None = None
+    change_request: str | None = None
 
 
 class FixPromptRequest(BaseModel):
@@ -59,242 +72,503 @@ class FixPromptRequest(BaseModel):
     error_description: str
 
 
-class ChatRequest(BaseModel):
-    package_id: str
-    message: str
+def _authenticated_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> dict[str, str]:
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="A signed-in Supabase session is required.")
+    try:
+        user_id = verify_access_token(credentials.credentials)
+    except AuthApiError as error:
+        raise HTTPException(status_code=401, detail="The Supabase session is invalid or expired.") from error
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=503, detail="Supabase Auth could not be reached.") from error
+    except (ValueError, ConnectionError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return {"id": user_id, "access_token": credentials.credentials}
 
 
-# ─────────────────────────────────────────────
-# Background job runner
-# ─────────────────────────────────────────────
-def run_pipeline_job(job_id: str, language: str, video_style: str, genre: str):
-    """Runs the pipeline in the background and updates job status."""
-    def add_log(message: str, level: str = "info"):
-        jobs[job_id].setdefault("logs", []).append({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _package_from_state(
+    package_id: str,
+    user_id: str,
+    state: dict,
+    status: str,
+    story_versions: list[dict] | None = None,
+    current_story_version: int = 0,
+    approved_story_version: int | None = None,
+    generation_error: str | None = None,
+) -> dict:
+    return {
+        "id": package_id,
+        "user_id": user_id,
+        "status": status,
+        "language": state.get("language", "English"),
+        "topic": state.get("best_topic", ""),
+        "virality_score": state.get("virality_score", 0),
+        "trending_videos": state.get("trending_videos", []),
+        "trend_scores": state.get("trend_scores", {}),
+        "research_brief": state.get("research_brief", {}),
+        "research_trace": state.get("research_trace", []),
+        "research_errors": state.get("research_errors", []),
+        "story": state.get("story", ""),
+        "characters": state.get("characters", []),
+        "video_clips": state.get("video_clips", []),
+        "thumbnail_prompt": state.get("thumbnail_prompt", ""),
+        "seo_metadata": state.get("seo_metadata", {}),
+        "current_story_version": current_story_version,
+        "approved_story_version": approved_story_version,
+        "ai_review_approved": bool(state.get("ai_review_approved", False)),
+        "story_approved": bool(state.get("story_approved", False)),
+        "review_pass_count": state.get("review_pass_count", 0),
+        "reviewer_feedback": state.get("reviewer_feedback"),
+        "story_versions": story_versions or [],
+        "workflow_state": state,
+        "generation_error": generation_error,
+    }
+
+
+def _save_job_package(package: dict, access_token: str, user_id: str) -> dict:
+    saved = save_video_package(package, access_token)
+    if saved.get("user_id") != user_id:
+        raise RuntimeError("Supabase returned a package that does not belong to the signed-in user.")
+    job = jobs.get(package["id"])
+    if job is not None:
+        job["result"] = saved
+    return saved
+
+
+def _log(job_id: str, message: str, level: str = "info") -> None:
+    job = jobs.get(job_id)
+    if job is not None:
+        job.setdefault("logs", []).append({
+            "timestamp": _now(),
             "level": level,
             "message": message,
         })
 
-    def cancellation_requested() -> bool:
-        if jobs[job_id].get("cancel_requested"):
-            jobs[job_id]["status"] = "canceled"
-            add_log("Generation canceled before the next workflow step", "warning")
-            return True
-        return False
 
+def _cancel_requested(job_id: str) -> bool:
+    job = jobs.get(job_id)
+    return bool(job and job.get("cancel_requested"))
+
+
+def _mark_cancelled(job_id: str, package: dict, user_id: str, access_token: str) -> None:
+    package["status"] = "cancelled"
+    package["generation_error"] = None
+    _save_job_package(package, access_token, user_id)
+    job = jobs.get(job_id)
+    if job is not None:
+        job["status"] = "cancelled"
+    _log(job_id, "Generation cancelled at a workflow boundary", "warning")
+
+
+def _set_failed(job_id: str, package: dict, user_id: str, access_token: str, error: Exception) -> None:
+    message = f"{type(error).__name__}: {error}"
+    job = jobs.get(job_id)
+    if job is not None:
+        job["status"] = "failed"
+        job["error"] = message
+    package["status"] = "failed"
+    package["generation_error"] = message
+    _log(job_id, message, "error")
     try:
-        jobs[job_id]["status"] = "running"
-        if cancellation_requested():
-            return
-        add_log(f"Pipeline started: language={language}, style={video_style}, genre={genre}")
-        
-        # Initialize an empty package structure for streaming
-        package = {
-            "id": job_id,
-            "language": language,
-            "topic": "",
-            "story": "",
-            "virality_score": 0,
-            "characters": [],
-            "video_clips": [],
-            "thumbnail_prompt": "",
-            "seo_metadata": {},
-            "trending_videos": [],
-            "trend_scores": {},
-            "research_brief": {},
-            "research_trace": [],
-            "research_errors": [],
-            "completed_steps": [],
-        }
-        jobs[job_id]["result"] = package
-        add_log("Initial package state created")
-
-        # Stream updates from the workflow
-        for output in run_pipeline_stream(language=language, video_style=video_style, genre=genre):
-            if cancellation_requested():
-                return
-            # output is a dict where keys are the names of the nodes that just completed
-            # and values are the partial state updates.
-            for node_name, state_update in output.items():
-                add_log(f"Step completed: {node_name}")
-                if node_name not in package["completed_steps"]:
-                    package["completed_steps"].append(node_name)
-                
-                # Update our package dict with any new state keys
-                if "best_topic" in state_update:
-                    package["topic"] = state_update["best_topic"]
-                if "language" in state_update:
-                    package["language"] = state_update["language"]
-                if "story" in state_update:
-                    package["story"] = state_update["story"]
-                if "virality_score" in state_update:
-                    package["virality_score"] = state_update["virality_score"]
-                if "characters" in state_update:
-                    package["characters"] = state_update["characters"]
-                if "video_clips" in state_update:
-                    package["video_clips"] = state_update["video_clips"]
-                if "thumbnail_prompt" in state_update:
-                    package["thumbnail_prompt"] = state_update["thumbnail_prompt"]
-                if "seo_metadata" in state_update:
-                    package["seo_metadata"] = state_update["seo_metadata"]
-                if "trending_videos" in state_update:
-                    package["trending_videos"] = state_update["trending_videos"]
-                if "trend_scores" in state_update:
-                    package["trend_scores"] = state_update["trend_scores"]
-                if "meta_evidence" in state_update:
-                    package["research_brief"].setdefault("evidence", {})["owned_meta_evidence"] = state_update["meta_evidence"]
-                if "research_brief" in state_update:
-                    package["research_brief"] = state_update["research_brief"]
-                if "research_trace" in state_update:
-                    package["research_trace"] = state_update["research_trace"]
-                    for event in state_update["research_trace"]:
-                        add_log(
-                            f"[research:{event.get('stage', 'unknown')}] {event.get('message', '')}",
-                            "info",
-                        )
-                if "research_errors" in state_update:
-                    package["research_errors"] = state_update["research_errors"]
-                    for error in state_update["research_errors"]:
-                        add_log(
-                            f"[research:{error.get('stage', 'unknown')}] {error.get('type', 'Error')}: {error.get('message', '')}",
-                            "error",
-                        )
-                
-                # Assign back to jobs dictionary so polling endpoint picks it up
-                jobs[job_id]["result"] = package
-                add_log(f"Updated package fields from {node_name}: {', '.join(state_update.keys())}")
-
-        # Finalize
-        if cancellation_requested():
-            return
-        package_to_save = {k: v for k, v in package.items() if k != "completed_steps"}
-
-        try:
-            add_log("Saving completed package to Supabase")
-            print(f"🗄️ [Supabase] Attempting to save package {job_id}...")
-            print(f"🗄️ [Supabase] Payload keys: {list(package_to_save.keys())}")
-            saved = save_video_package(package_to_save)
-            if saved:
-                print(f"✅ [Supabase] Successfully saved package {job_id}")
-                jobs[job_id]["status"] = "completed"
-                add_log("Package saved successfully", "success")
-            else:
-                print(f"⚠️ [Supabase] Save returned empty response - check table schema")
-                jobs[job_id]["status"] = "completed_unsaved"
-                jobs[job_id]["error"] = "Supabase save returned empty response."
-                add_log("Package generated, but Supabase returned no saved record", "warning")
-        except Exception as db_err:
-            print(f"❌ [Supabase] FAILED to save: {type(db_err).__name__}: {db_err}")
-            print(f"❌ [Supabase] Payload that failed: {list(package_to_save.keys())}")
-            jobs[job_id]["status"] = "completed_unsaved"
-            jobs[job_id]["error"] = str(db_err)
-            add_log(f"Package generated, but Supabase save failed: {type(db_err).__name__}: {db_err}", "warning")
-    except Exception as e:
-        print(f"\n❌ [Pipeline ERROR] Job {job_id} failed: {e}")
+        _save_job_package(package, access_token, user_id)
+    except Exception:
         traceback.print_exc()
-        jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = str(e)
-        add_log(f"Pipeline failed: {type(e).__name__}: {e}", "error")
 
 
-# ─────────────────────────────────────────────
-# API Endpoints
-# ─────────────────────────────────────────────
+def _version_record(
+    version: int,
+    story: str,
+    state: dict,
+    status: str,
+    submitted_at: str | None = None,
+) -> dict:
+    return {
+        "version": version,
+        "story": story,
+        "status": status,
+        "review_pass_count": state.get("review_pass_count", 0),
+        "revision_count": state.get("revision_count", 0),
+        "virality_score": state.get("virality_score", 0),
+        "reviewer_feedback": state.get("reviewer_feedback"),
+        "submitted_at": submitted_at or _now(),
+    }
+
+
+def run_story_pipeline_job(
+    package_id: str,
+    user_id: str,
+    access_token: str,
+    language: str,
+    video_style: str,
+    genre: str,
+) -> None:
+    """Generate and review a story, then persist it for the creator's decision."""
+    job = jobs[package_id]
+    job["status"] = "running"
+    state = create_initial_state(language, video_style, genre)
+    package = _package_from_state(package_id, user_id, state, "generating_story")
+    _log(package_id, "Story generation started")
+    try:
+        for update in run_pipeline_stream(language, video_style, genre):
+            if _cancel_requested(package_id):
+                package["workflow_state"] = state
+                _mark_cancelled(package_id, package, user_id, access_token)
+                return
+            for node_name, state_update in update.items():
+                state.update(state_update)
+                _log(package_id, f"Story stage completed: {node_name}")
+
+        status = "needs_creator_review" if state.get("manual_review_required") else "awaiting_approval"
+        version = _version_record(1, state.get("story", ""), state, status)
+        package = _package_from_state(
+            package_id,
+            user_id,
+            state,
+            status,
+            [version],
+            current_story_version=1,
+        )
+        _save_job_package(package, access_token, user_id)
+        job["status"] = status
+        job["error"] = None
+        _log(package_id, "Story saved and waiting for the creator's decision", "success")
+    except Exception as error:
+        traceback.print_exc()
+        _set_failed(package_id, package, user_id, access_token, error)
+
+
+def run_story_revision_job(
+    package_id: str,
+    user_id: str,
+    access_token: str,
+    package: dict,
+    state: dict,
+    change_request: str | None,
+) -> None:
+    job = jobs[package_id]
+    job["status"] = "running"
+    try:
+        for update in run_story_review_stream(state, change_request):
+            if _cancel_requested(package_id):
+                package["workflow_state"] = state
+                _mark_cancelled(package_id, package, user_id, access_token)
+                return
+            for node_name, state_update in update.items():
+                state.update(state_update)
+                _log(package_id, f"Story review stage completed: {node_name}")
+
+        status = "needs_creator_review" if state.get("manual_review_required") else "awaiting_approval"
+        versions = package["story_versions"]
+        versions[-1] = _version_record(
+            package["current_story_version"],
+            state.get("story", ""),
+            state,
+            status,
+            versions[-1].get("submitted_at"),
+        )
+        package = _package_from_state(
+            package_id,
+            user_id,
+            state,
+            status,
+            versions,
+            current_story_version=package["current_story_version"],
+        )
+        _save_job_package(package, access_token, user_id)
+        job["status"] = status
+        job["error"] = None
+        _log(package_id, "Updated story version is ready for creator review", "success")
+    except Exception as error:
+        traceback.print_exc()
+        _set_failed(package_id, package, user_id, access_token, error)
+
+
+def run_production_job(
+    package_id: str,
+    user_id: str,
+    access_token: str,
+    package: dict,
+    state: dict,
+) -> None:
+    job = jobs[package_id]
+    job["status"] = "running"
+    try:
+        for update in run_production_stream(state):
+            if _cancel_requested(package_id):
+                package["workflow_state"] = state
+                _mark_cancelled(package_id, package, user_id, access_token)
+                return
+            for node_name, state_update in update.items():
+                state.update(state_update)
+                package["workflow_state"] = state
+                package.update({
+                    "characters": state.get("characters", []),
+                    "video_clips": state.get("video_clips", []),
+                    "thumbnail_prompt": state.get("thumbnail_prompt", ""),
+                    "seo_metadata": state.get("seo_metadata", {}),
+                })
+                _log(package_id, f"Production stage completed: {node_name}")
+                _save_job_package(package, access_token, user_id)
+
+        package["status"] = "completed"
+        package["generation_error"] = None
+        _save_job_package(package, access_token, user_id)
+        job["status"] = "completed"
+        job["error"] = None
+        _log(package_id, "Approved-story production kit completed", "success")
+    except Exception as error:
+        traceback.print_exc()
+        _set_failed(package_id, package, user_id, access_token, error)
+
+
 @app.get("/")
 def health_check():
     return {"status": "online", "message": "ClipCraft Studio API is running"}
 
 
 @app.post("/generate")
-def generate_video_package(request: GenerateRequest, background_tasks: BackgroundTasks):
-    """
-    Triggers the full AI pipeline to generate a complete video package.
-    Returns a job_id immediately. Poll /status/{job_id} to check progress.
-    """
+def generate_video_package(
+    request: GenerateRequest,
+    background_tasks: BackgroundTasks,
+    user: dict[str, str] = Depends(_authenticated_user),
+):
     if request.language not in ["Auto", "English", "Hindi", "Nepali"]:
         raise HTTPException(status_code=400, detail="Language must be 'Auto', 'English', 'Hindi', or 'Nepali'.")
 
-    job_id = str(uuid.uuid4())
-    jobs[job_id] = {
+    package_id = str(uuid.uuid4())
+    language = request.language
+    initial_state = create_initial_state(language, request.video_style, request.genre)
+    package = _package_from_state(package_id, user["id"], initial_state, "generating_story")
+    try:
+        saved = save_video_package(package, user["access_token"])
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not save the story draft. Verify Supabase configuration and apply the authenticated schema: {type(error).__name__}.",
+        ) from error
+    if saved.get("user_id") != user["id"]:
+        raise HTTPException(status_code=503, detail="Supabase did not confirm ownership of the saved draft.")
+
+    jobs[package_id] = {
+        "owner_id": user["id"],
         "status": "queued",
-        "result": None,
+        "result": saved,
         "error": None,
         "cancel_requested": False,
-        "logs": [{
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "level": "info",
-            "message": "Generation request accepted and queued",
-        }],
+        "logs": [],
     }
-
-    background_tasks.add_task(run_pipeline_job, job_id, request.language, request.video_style, request.genre)
-
-    return {"job_id": job_id, "status": "queued", "message": "Pipeline started! Poll /status/{job_id} for updates."}
+    background_tasks.add_task(
+        run_story_pipeline_job,
+        package_id,
+        user["id"],
+        user["access_token"],
+        language,
+        request.video_style,
+        request.genre,
+    )
+    return {"job_id": package_id, "status": "queued"}
 
 
 @app.post("/cancel/{job_id}")
-def cancel_job(job_id: str):
-    """Request cooperative cancellation of a queued or running generation job."""
-    if job_id not in jobs:
+def cancel_job(job_id: str, user: dict[str, str] = Depends(_authenticated_user)):
+    job = jobs.get(job_id)
+    if not job or job.get("owner_id") != user["id"]:
         raise HTTPException(status_code=404, detail="Job not found.")
-
-    job = jobs[job_id]
     if job["status"] not in ["queued", "running"]:
         raise HTTPException(status_code=409, detail=f"Job is already {job['status']}.")
-
     job["cancel_requested"] = True
-    job.setdefault("logs", []).append({
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "level": "warning",
-        "message": "Cancellation requested; stopping at the next workflow boundary",
-    })
+    _log(job_id, "Cancellation requested", "warning")
     return {"status": job["status"], "message": "Cancellation requested."}
 
 
 @app.get("/status/{job_id}")
-def get_job_status(job_id: str):
-    """Poll this endpoint to check the status of a running pipeline job."""
-    if job_id not in jobs:
+def get_job_status(job_id: str, user: dict[str, str] = Depends(_authenticated_user)):
+    job = jobs.get(job_id)
+    if job is not None:
+        if job.get("owner_id") != user["id"]:
+            raise HTTPException(status_code=404, detail="Job not found.")
+        return job
+
+    package = get_package_by_id(job_id, user["id"], user["access_token"])
+    if not package:
         raise HTTPException(status_code=404, detail="Job not found.")
-    return jobs[job_id]
+    if package.get("status") in ["generating_story", "reviewing_story", "generating_assets"]:
+        package["status"] = "failed"
+        package["generation_error"] = (
+            "The backend restarted during generation. This incomplete run cannot resume; "
+            "create a new story. Saved review drafts can still be reopened and resumed."
+        )
+        try:
+            package = save_video_package(package, user["access_token"])
+        except Exception as error:
+            raise HTTPException(status_code=503, detail="Could not record the interrupted generation.") from error
+    return {
+        "status": package.get("status", "failed"),
+        "result": package,
+        "error": package.get("generation_error"),
+        "logs": [],
+    }
 
 
 @app.get("/packages")
-def list_packages():
-    """Fetch all previously generated video packages from Supabase."""
+def list_packages(user: dict[str, str] = Depends(_authenticated_user)):
     try:
-        return get_all_packages()
-    except Exception as e:
-        print(f"[WARNING] Could not fetch packages from Supabase: {e}")
-        raise HTTPException(status_code=503, detail="Supabase is unavailable; package history could not be loaded.")
+        return get_all_packages(user["id"], user["access_token"])
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Supabase is unavailable; package history could not be loaded.") from error
 
 
 @app.get("/packages/{package_id}")
-def get_package(package_id: str):
-    """Fetch a single video package by its ID."""
-    if package_id in jobs and jobs[package_id].get("result"):
-        return jobs[package_id]["result"]
-    
-    package = get_package_by_id(package_id)
+def get_package(package_id: str, user: dict[str, str] = Depends(_authenticated_user)):
+    package = get_package_by_id(package_id, user["id"], user["access_token"])
     if not package:
         raise HTTPException(status_code=404, detail="Package not found.")
     return package
 
 
-@app.post("/fix-prompt")
-def fix_prompt(request: FixPromptRequest):
-    """
-    Chatbox endpoint: Regenerate a single clip prompt that failed in an external video tool.
-    """
-    if request.package_id in jobs and jobs[request.package_id].get("result"):
-        package = jobs[request.package_id]["result"]
-    else:
-        package = get_package_by_id(request.package_id)
-        
+@app.post("/packages/{package_id}/revise")
+def revise_story(
+    package_id: str,
+    request: StoryRevisionRequest,
+    background_tasks: BackgroundTasks,
+    user: dict[str, str] = Depends(_authenticated_user),
+):
+    story = request.story.strip() if request.story else ""
+    change_request = request.change_request.strip() if request.change_request else ""
+    if not story and not change_request:
+        raise HTTPException(status_code=400, detail="Provide an edited story or a change request.")
+    if request.story is not None and not story:
+        raise HTTPException(status_code=400, detail="Story cannot be blank.")
+
+    package = get_package_by_id(package_id, user["id"], user["access_token"])
     if not package:
         raise HTTPException(status_code=404, detail="Package not found.")
+    state = package.get("workflow_state")
+    if not isinstance(state, dict) or not state.get("story"):
+        raise HTTPException(status_code=409, detail="This package has no resumable story workflow state.")
+    if package.get("status") in ["generating_story", "reviewing_story", "generating_assets"]:
+        raise HTTPException(status_code=409, detail="Wait for the current generation stage to finish.")
 
+    state = dict(state)
+    submitted_story = story or state["story"]
+    state.update({
+        "story": submitted_story,
+        "story_approved": False,
+        "manual_review_required": False,
+        "review_pass_count": 0,
+        "revision_count": 0,
+        "virality_score": 0,
+        "reviewer_feedback": change_request or None,
+        "ai_review_approved": False,
+        "is_duplicate": False,
+        "duplication_feedback": None,
+        "characters": [],
+        "video_clips": [],
+        "thumbnail_prompt": "",
+        "seo_metadata": {},
+    })
+    version = int(package.get("current_story_version", 0)) + 1
+    version_record = _version_record(version, submitted_story, state, "reviewing_story")
+    versions = list(package.get("story_versions") or [])
+    versions.append(version_record)
+    package = _package_from_state(
+        package_id,
+        user["id"],
+        state,
+        "reviewing_story",
+        versions,
+        current_story_version=version,
+    )
+    try:
+        _save_job_package(package, user["access_token"], user["id"])
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Could not save the new story version.") from error
+
+    jobs[package_id] = {
+        "owner_id": user["id"],
+        "status": "queued",
+        "result": package,
+        "error": None,
+        "cancel_requested": False,
+        "logs": [],
+    }
+    background_tasks.add_task(
+        run_story_revision_job,
+        package_id,
+        user["id"],
+        user["access_token"],
+        package,
+        state,
+        change_request or None,
+    )
+    return {"job_id": package_id, "status": "queued", "story_version": version}
+
+
+@app.post("/packages/{package_id}/approve")
+def approve_story(
+    package_id: str,
+    background_tasks: BackgroundTasks,
+    user: dict[str, str] = Depends(_authenticated_user),
+):
+    package = get_package_by_id(package_id, user["id"], user["access_token"])
+    if not package:
+        raise HTTPException(status_code=404, detail="Package not found.")
+    if package.get("status") not in ["awaiting_approval", "needs_creator_review"]:
+        raise HTTPException(status_code=409, detail="This story is not waiting for creator approval.")
+    if not package.get("story") or not package.get("workflow_state"):
+        raise HTTPException(status_code=409, detail="The story workflow state is incomplete.")
+
+    state = dict(package["workflow_state"])
+    state["story_approved"] = True
+    approved_version = package.get("current_story_version")
+    package.update({
+        "status": "generating_assets",
+        "story_approved": True,
+        "approved_story_version": approved_version,
+        "workflow_state": state,
+        "generation_error": None,
+    })
+    versions = list(package.get("story_versions") or [])
+    if versions:
+        versions[-1] = {**versions[-1], "status": "approved", "approved_at": _now()}
+        package["story_versions"] = versions
+    try:
+        saved = _save_job_package(package, user["access_token"], user["id"])
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Could not persist story approval.") from error
+
+    jobs[package_id] = {
+        "owner_id": user["id"],
+        "status": "queued",
+        "result": saved,
+        "error": None,
+        "cancel_requested": False,
+        "logs": [],
+    }
+    background_tasks.add_task(
+        run_production_job,
+        package_id,
+        user["id"],
+        user["access_token"],
+        saved,
+        state,
+    )
+    return {"job_id": package_id, "status": "queued"}
+
+
+@app.post("/fix-prompt")
+def fix_prompt(request: FixPromptRequest, user: dict[str, str] = Depends(_authenticated_user)):
+    package = get_package_by_id(request.package_id, user["id"], user["access_token"])
+    if not package:
+        raise HTTPException(status_code=404, detail="Package not found.")
+    if not package.get("story_approved"):
+        raise HTTPException(status_code=409, detail="Approve the story before revising production prompts.")
     fixed_clip = run_prompt_fix(
         story=package.get("story", ""),
         characters=package.get("characters", []),
@@ -304,9 +578,7 @@ def fix_prompt(request: FixPromptRequest):
     return {"fixed_clip": fixed_clip}
 
 
-# ─────────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

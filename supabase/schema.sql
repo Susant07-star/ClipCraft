@@ -1,14 +1,20 @@
--- ============================================================
--- SUPABASE DATABASE SCHEMA
--- ClipCraft Studio - AI Video Prompt Studio
--- ============================================================
--- Run this SQL in your Supabase SQL Editor to set up the database.
--- Go to: Supabase Dashboard → SQL Editor → New Query → Paste & Run
--- ============================================================
+-- Reference schema for ClipCraft Studio.
+-- Apply database changes using the tracked migration in migrations/ and
+-- `npx supabase db push` from the repository root.
 
 CREATE TABLE IF NOT EXISTS video_packages (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at  TIMESTAMPTZ DEFAULT NOW(),
+    user_id     UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    status      TEXT NOT NULL DEFAULT 'completed',
+    current_story_version INT NOT NULL DEFAULT 0,
+    approved_story_version INT,
+    ai_review_approved BOOLEAN NOT NULL DEFAULT false,
+    story_approved BOOLEAN NOT NULL DEFAULT false,
+    review_pass_count INT NOT NULL DEFAULT 0,
+    story_versions JSONB NOT NULL DEFAULT '[]',
+    workflow_state JSONB NOT NULL DEFAULT '{}',
+    generation_error TEXT,
 
     -- Generation metadata
     language    TEXT NOT NULL DEFAULT 'English',
@@ -44,12 +50,64 @@ ALTER TABLE video_packages
 ALTER TABLE video_packages
     ADD COLUMN IF NOT EXISTS research_errors JSONB DEFAULT '[]';
 
--- Index for fast ordering by date (sidebar history list)
-CREATE INDEX IF NOT EXISTS idx_video_packages_created_at ON video_packages(created_at DESC);
+ALTER TABLE video_packages
+    ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
 
--- Enable Row Level Security (optional — useful if you add auth later)
+ALTER TABLE video_packages
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed';
+
+ALTER TABLE video_packages
+    ADD COLUMN IF NOT EXISTS current_story_version INT NOT NULL DEFAULT 0;
+
+ALTER TABLE video_packages
+    ADD COLUMN IF NOT EXISTS approved_story_version INT;
+
+ALTER TABLE video_packages
+    ADD COLUMN IF NOT EXISTS ai_review_approved BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE video_packages
+    ADD COLUMN IF NOT EXISTS story_approved BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE video_packages
+    ADD COLUMN IF NOT EXISTS review_pass_count INT NOT NULL DEFAULT 0;
+
+ALTER TABLE video_packages
+    ADD COLUMN IF NOT EXISTS story_versions JSONB NOT NULL DEFAULT '[]';
+
+ALTER TABLE video_packages
+    ADD COLUMN IF NOT EXISTS workflow_state JSONB NOT NULL DEFAULT '{}';
+
+ALTER TABLE video_packages
+    ADD COLUMN IF NOT EXISTS generation_error TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_video_packages_user_created_at
+    ON video_packages(user_id, created_at DESC);
+
 ALTER TABLE video_packages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE video_packages FORCE ROW LEVEL SECURITY;
 
--- Allow all operations for now (open access — add auth policy later if needed)
 DROP POLICY IF EXISTS "Allow all" ON video_packages;
-CREATE POLICY "Allow all" ON video_packages FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Users can read their packages" ON video_packages;
+DROP POLICY IF EXISTS "Users can create their packages" ON video_packages;
+DROP POLICY IF EXISTS "Users can update their packages" ON video_packages;
+DROP POLICY IF EXISTS "Users can delete their packages" ON video_packages;
+
+REVOKE ALL ON TABLE video_packages FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE video_packages TO authenticated;
+
+CREATE POLICY "Users can read their packages"
+    ON video_packages FOR SELECT TO authenticated
+    USING ((SELECT auth.uid()) = user_id);
+
+CREATE POLICY "Users can create their packages"
+    ON video_packages FOR INSERT TO authenticated
+    WITH CHECK ((SELECT auth.uid()) = user_id);
+
+CREATE POLICY "Users can update their packages"
+    ON video_packages FOR UPDATE TO authenticated
+    USING ((SELECT auth.uid()) = user_id)
+    WITH CHECK ((SELECT auth.uid()) = user_id);
+
+CREATE POLICY "Users can delete their packages"
+    ON video_packages FOR DELETE TO authenticated
+    USING ((SELECT auth.uid()) = user_id);
