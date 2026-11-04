@@ -17,7 +17,7 @@ BASETEN_BASE_URL = os.environ.get(
 )
 BASETEN_MODEL_ID = os.environ.get(
     "BASETEN_MODEL_ID",
-    "meta-models/muse-spark-open",
+    "meta-models/muse-spark-open-1026",
 )
 REQUEST_TIMEOUT_SECONDS = 120.0
 

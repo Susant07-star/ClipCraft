@@ -35,7 +35,7 @@ class LLMManagerTests(unittest.TestCase):
         self.assertIsInstance(result, AIMessage)
         self.assertEqual(result.content, "A short story.")
         openai_client.return_value.chat.completions.create.assert_called_once_with(
-            model="meta-models/muse-spark-open",
+            model="meta-models/muse-spark-open-1026",
             messages=[
                 {"role": "developer", "content": "Write a story."},
                 {"role": "user", "content": "A lost lighthouse."},

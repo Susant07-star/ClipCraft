@@ -17,8 +17,7 @@ from utils.llm_manager import robust_llm_invoke
 load_dotenv()
 
 SEO_SYSTEM_PROMPT = """You are an expert social media SEO strategist specializing in short-form video content.
-Your goal is to maximize views, watch time, and engagement on each platform by crafting
-platform-specific titles, descriptions, and hashtags that work with each platform's algorithm.
+Create clear, platform-appropriate metadata grounded in the supplied story. Do not promise reach or performance, claim something is trending, or invent trending audio.
 
 === PLATFORM GUIDELINES ===
 
@@ -26,12 +25,12 @@ YOUTUBE SHORTS:
 - Title: 40-70 characters, include a number or "POV:" or a question, add power words (Shocking, Secret, Revealed).
   Example: "This AI Revealed A Secret That Changed Everything 😱"
 - Description: 150-300 characters. Include keywords naturally. Add a call to action ("Follow for more!"). MUST append the tags/hashtags at the very end of the description text.
-- Tags: 10-15 specific tags. Mix broad (#AIShorts) and niche (#AIHorrorStory). IMPORTANT: Generate hashtags that go viral globally, regardless of whether the story language is English or Hindi. Use universally recognized viral tags.
+- Tags: 3-8 specific tags grounded in the story. Do not describe tags as viral or trending.
 
 TIKTOK:
-- Caption: 100-150 characters MAX. Must include 1-2 trending sounds reference or a trend hook.
+- Caption: 100-150 characters MAX. Use a story-specific hook. Never invent a trending sound.
   Example: "POV: The AI predicted your future 😱 #AITikTok #fyp"
-- Hashtags: 5-8 hashtags. Always include #fyp #foryou. Mix viral + niche tags.
+- Hashtags: 3-6 relevant hashtags. Do not add unrelated reach-bait tags.
 - Note: No separate title on TikTok - caption IS the title.
 
 INSTAGRAM REELS:
@@ -87,7 +86,7 @@ Story Language: {language}
 Story Summary:
 {story[:500]}...
 
-Generate metadata for: YouTube Shorts, TikTok, Instagram Reels, and Facebook Reels.
+Generate metadata for: {', '.join(state.get('selected_platforms', ['youtube', 'tiktok', 'instagram', 'facebook']))}.
 """
         ),
     ]
@@ -100,9 +99,13 @@ Generate metadata for: YouTube Shorts, TikTok, Instagram Reels, and Facebook Ree
         start = raw.find("{")
         end = raw.rfind("}") + 1
         seo_metadata = json.loads(raw[start:end])
-    except (json.JSONDecodeError, ValueError):
-        seo_metadata = {}
+    except (json.JSONDecodeError, ValueError) as error:
+        raise ValueError(f"Metadata generation returned invalid JSON: {error}") from error
+    selected = set(state.get("selected_platforms", ["youtube", "tiktok", "instagram", "facebook"]))
+    seo_metadata = {key: value for key, value in seo_metadata.items() if key in selected}
+    if not seo_metadata or any(not isinstance(value, dict) or not value for value in seo_metadata.values()):
+        raise ValueError("Metadata generation returned no usable platform metadata.")
 
-    print("✅ [SEO Specialist] Metadata generated for all 4 platforms.")
+    print(f"✅ [SEO Specialist] Metadata generated for {len(seo_metadata)} selected platform(s).")
 
     return {**state, "seo_metadata": seo_metadata}

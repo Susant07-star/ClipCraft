@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS video_packages (
     ai_review_approved BOOLEAN NOT NULL DEFAULT false,
     story_approved BOOLEAN NOT NULL DEFAULT false,
     review_pass_count INT NOT NULL DEFAULT 0,
+    reviewer_feedback TEXT,
     story_versions JSONB NOT NULL DEFAULT '[]',
     workflow_state JSONB NOT NULL DEFAULT '{}',
     generation_error TEXT,
@@ -19,6 +20,8 @@ CREATE TABLE IF NOT EXISTS video_packages (
     -- Generation metadata
     language    TEXT NOT NULL DEFAULT 'English',
     topic       TEXT,
+    target_duration INT NOT NULL DEFAULT 60 CHECK (target_duration BETWEEN 30 AND 90),
+    selected_platforms JSONB NOT NULL DEFAULT '["youtube", "tiktok", "instagram", "facebook"]',
     virality_score INT DEFAULT 0,
     trending_videos JSONB DEFAULT '[]', -- Recent videos used for trend research
     trend_scores JSONB DEFAULT '{}',    -- Google Trends scores by keyword

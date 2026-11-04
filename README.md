@@ -12,6 +12,11 @@ ClipCraft Studio is an AI-powered short-form video content generation studio. It
 
 **Model choice and roadmap:** Meta model credits could not be activated during development because the required payment-card verification was unavailable. To keep the product working and judgeable, ClipCraft uses the hackathon-accessible Muse Spark Open model through Baseten for its language workflow. The architecture keeps the story, character, scene, and metadata stages separated so future image and video models can be connected without redesigning the creator experience. When access to suitable Meta image/video models becomes available, the next phase is a complete video generation studio: generate visuals from the approved package, assemble the final short, and provide direct upload or handoff to supported video platforms.
 
+## Demo and live app
+
+- **Try ClipCraft live:** [clip-craft-chi.vercel.app](https://clip-craft-chi.vercel.app/)
+- **Watch the demo video:** [ClipCraft Studio demo on YouTube](https://youtu.be/CoE6uJE0TTc)
+
 ## What a reviewer can try
 
 1. Optionally describe a story idea (up to 1,000 characters). Genre and visual style can be selected or described in the brief; leave all of them open for AI to decide. Language defaults to Auto (Best Market).

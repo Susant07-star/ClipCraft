@@ -17,6 +17,7 @@ build/
 coverage/
 *.tsbuildinfo
 .vercel/
+final-video/
 
 # Python environments, bytecode, and test/tool caches
 .venv/

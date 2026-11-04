@@ -1,0 +1,11 @@
+{
+  "name": "clipcraft-recording-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo": "node demo.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.52.0"
+  }
+}

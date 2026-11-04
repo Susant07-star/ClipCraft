@@ -18,6 +18,20 @@
   box-sizing: border-box;
 }
 
+html, body {
+  min-width: 320px;
+  overflow-x: hidden;
+}
+
+button, input, select, textarea {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid #c4b5fd;
+  outline-offset: 2px;
+}
+
 html {
   scroll-behavior: smooth;
 }
@@ -93,7 +107,8 @@ body {
   color: var(--text-muted);
   cursor: pointer;
   font-size: 12px;
-  padding: 4px 10px;
+  min-height: 44px;
+  padding: 8px 12px;
   transition: all 0.2s;
 }
 .copy-btn:hover { border-color: var(--accent-light); color: var(--accent-light); }
@@ -128,3 +143,19 @@ body {
 .badge-green { background: rgba(16, 185, 129, 0.15); color: var(--success); }
 .badge-yellow { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
 .badge-red { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+
+@media (max-width: 640px) {
+  .card, .clip-card {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

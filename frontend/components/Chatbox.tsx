@@ -78,10 +78,10 @@ export default function Chatbox({ accessToken, packageId, onClose }: ChatboxProp
 
   return (
     <div
-      className="fixed bottom-4 right-4 z-50 flex flex-col rounded-2xl shadow-2xl md:bottom-6 md:right-6"
+      className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom)+0.5rem)] z-50 flex flex-col rounded-2xl shadow-2xl sm:inset-x-auto sm:bottom-4 sm:right-4 md:bottom-6 md:right-6"
       style={{
         width: "min(420px, calc(100vw - 2rem))",
-        height: "min(560px, calc(100dvh - 2rem))",
+        height: "min(560px, calc(100dvh - env(safe-area-inset-bottom) - 1rem))",
         background: "#12121a",
         border: "1px solid #2a2a3d",
         boxShadow: "0 0 40px rgba(124,58,237,0.2)",
