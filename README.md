@@ -1,8 +1,12 @@
 # ClipCraft Studio
 
+> Built for the **Meta Global AI Hackathon**.
+
 ClipCraft Studio is an AI-powered short-form video content generation studio. It turns a creator's idea—or a blank brief—into a researched, reviewed, and production-ready video package. The creator starts with the best-market language setting, can choose a genre and visual style or describe them in the brief, and explicitly approves the story before downstream video assets are generated.
 
 **What it generates today:** ClipCraft creates the creative foundation for a short-form video: an original script, review feedback, character and continuity direction, numbered scene-by-scene video prompts, a thumbnail prompt, and platform-specific metadata for YouTube Shorts, TikTok, Instagram Reels, and Facebook Reels. It is designed to reduce the distance between an idea and a video that is ready to produce.
+
+**Hackathon focus:** ClipCraft addresses the gap between a creator's initial idea and a production-ready short-form video workflow. It combines research, creative generation, review, creator approval, and structured downstream prompts in one accessible studio.
 
 **Current boundary:** This submission generates and organizes the text and creative direction required to produce the video; it does not yet render the final image/video files, upload them to social platforms, or promise reach. Creator approval remains the quality gate before production prompts are generated.
 
@@ -17,6 +21,14 @@ ClipCraft Studio is an AI-powered short-form video content generation studio. It
 5. Reopen saved work from the browser's private package history, copy the text assets, or export the package.
 
 See [the user flow](docs/user-flow.md) for the complete interaction and boundaries, [the deployment guide](docs/deployment.md) for hosting, and [the three-minute demo guide](docs/demo-script.md) for a timed recording plan.
+
+## Highlights
+
+- AI-assisted story and script generation from an optional creative brief.
+- Research-informed topic development using YouTube and public web sources.
+- Human approval before character, scene, thumbnail, and metadata assets are produced.
+- Private guest project history backed by Supabase.
+- Responsive Next.js interface with a FastAPI and LangGraph workflow.
 
 ## Why this matters
 
