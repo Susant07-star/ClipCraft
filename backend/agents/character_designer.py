@@ -45,12 +45,18 @@ def run_character_designer(state: dict) -> dict:
     LangGraph node: Reads the approved story and generates character reference prompts.
     """
     story = state.get("story", "")
-    video_style = state.get("video_style", "Hyper-Realistic")
-    print(f"🎨 [Character Designer] Identifying and designing characters (Style: {video_style})...")
+    creator_brief = state.get("creator_topic", "")
+    video_style = state.get("video_style") or ""
+    style_instruction = (
+        f"Make all character descriptions explicitly match this style: {video_style}"
+        if video_style
+        else "Follow any visual style described in the creator's brief; if none is given, choose a coherent style that fits the story."
+    )
+    print(f"🎨 [Character Designer] Identifying and designing characters (Style: {video_style or 'brief-guided'})...")
 
     messages = [
         SystemMessage(content=CHARACTER_DESIGNER_SYSTEM_PROMPT),
-        HumanMessage(content=f"Read this story and create character reference prompts for all named characters:\n\n{story}\n\nIMPORTANT VISUAL STYLE: Make sure all character descriptions explicitly match this style: {video_style}"),
+        HumanMessage(content=f"CREATOR'S STORY BRIEF:\n{creator_brief}\n\nSTORY:\n{story}\n\nIMPORTANT VISUAL STYLE: {style_instruction}"),
     ]
 
     response = robust_llm_invoke(messages, temperature=0.6)
@@ -62,8 +68,10 @@ def run_character_designer(state: dict) -> dict:
         end = raw.rfind("}") + 1
         result = json.loads(raw[start:end])
         characters = result.get("characters", [])
-    except (json.JSONDecodeError, ValueError):
-        characters = []
+    except (json.JSONDecodeError, ValueError) as error:
+        raise ValueError(f"Character generation returned invalid JSON: {error}") from error
+    if not isinstance(characters, list):
+        raise ValueError("Character generation did not return a character list.")
 
     print(f"✅ [Character Designer] Designed {len(characters)} character(s).")
 

@@ -166,7 +166,7 @@ def search_web_context(query: str, max_results: int = 5) -> list[dict]:
     Returns a list of result snippets.
     """
     with DDGS() as ddgs:
-        results = ddgs.text(query, max_results=max_results)
+        results = ddgs.text(query, max_results=max_results, backend="lite")
         return [{
             "title": r.get("title", ""),
             "url": r.get("href", ""),
@@ -254,6 +254,27 @@ def run_research(state: dict) -> dict:
     a summary of trending topics and channel analytics.
     This output is passed to the story_writer agent.
     """
+    if not state.get("research_enabled", True):
+        topic = state.get("creator_topic", "").strip()
+        language = state.get("language", "English")
+        if language == "Auto":
+            language = "English"
+        genre = state.get("genre") or ""
+        fallback_topic = topic or (
+            f"An original {genre.lower()} story" if genre else "An original short-form story"
+        )
+        return {
+            **state,
+            "language": language,
+            "best_topic": fallback_topic,
+            "trending_videos": [],
+            "trend_scores": {},
+            "web_context": [],
+            "research_brief": {"status": "skipped", "reason": "Creator chose to disable research."},
+            "research_trace": [{"stage": "skipped", "message": "Research disabled by creator."}],
+            "research_errors": [],
+        }
+
     research_trace = []
     research_errors = []
 
@@ -283,13 +304,13 @@ def run_research(state: dict) -> dict:
             return default
 
     trace("start", "Research started", {
-        "genre": state.get("genre", "Funny"),
+        "genre": state.get("genre") or "",
         "language_requested": state.get("language", "Auto"),
         "video_style": state.get("video_style", "Hyper-Realistic"),
     })
     language = state.get("language", "Auto")
-    genre = state.get("genre", "Funny")
-    video_style = state.get("video_style", "Hyper-Realistic")
+    genre = state.get("genre") or ""
+    video_style = state.get("video_style") or ""
 
     # Mapping genres to specific high-quality search terms
     genre_queries = {
@@ -305,10 +326,15 @@ def run_research(state: dict) -> dict:
     }
     
     youtube_base_query, trend_keywords = genre_queries.get(genre, genre_queries["Funny"])
+    creator_topic = state.get("creator_topic", "").strip()
+    if creator_topic:
+        search_topic = " ".join(creator_topic.split())[:120]
+        youtube_base_query = search_topic
+        trend_keywords = [search_topic]
     
     # Prepend style for targeted youtube searches
     style_keyword = video_style.split()[0] if video_style else ""
-    youtube_full_query = f"{style_keyword} {youtube_base_query}".strip()
+    youtube_full_query = youtube_base_query if creator_topic else f"{style_keyword} {youtube_base_query}".strip()
 
     # 1. Determine Language (if Auto) and Fetch global trending AI videos
     if language == "Auto":
@@ -366,16 +392,29 @@ def run_research(state: dict) -> dict:
     trace("google_trends", "Collected Google Trends scores", {"scores": trend_scores})
 
     # 4. Find the most trending keyword
-    best_keyword = max(trend_scores, key=lambda keyword: trend_scores.get(keyword, 0), default=trend_keywords[0])
+    researched_keyword = max(trend_scores, key=lambda keyword: trend_scores.get(keyword, 0), default=trend_keywords[0])
+    best_keyword = state.get("creator_topic", "").strip() or researched_keyword
 
     # 5. Get web context for the best keyword
     # Localize the web search to the chosen language for better context
-    web_query = f"{best_keyword} viral video 2026"
+    web_query_topic = " ".join(best_keyword.split())[:120]
+    web_query = f"{web_query_topic} latest trends"
+    web_search_error_count = len(research_errors)
     if language != "English":
-         web_query += f" {language}"
-         
+        web_query += f" {language}"
+
     web_context = run_source("web_search", lambda: search_web_context(web_query, max_results=5), [])
     trace("web_search", f"Collected {len(web_context)} web results", {"query": web_query})
+    if not web_context and len(research_errors) == web_search_error_count:
+        fallback_query = f"{web_query_topic} story"
+        if language != "English":
+            fallback_query += f" {language}"
+        web_context = run_source(
+            "web_search_fallback",
+            lambda: search_web_context(fallback_query, max_results=5),
+            [],
+        )
+        trace("web_search_fallback", f"Collected {len(web_context)} web results", {"query": fallback_query})
 
     meta_evidence = run_source("meta_owned_accounts", collect_owned_meta_evidence, {})
     trace("meta_owned_accounts", "Collected owned Facebook and Instagram evidence", {

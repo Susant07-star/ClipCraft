@@ -108,3 +108,17 @@ def get_package_by_id(package_id: str, user_id: str, access_token: str) -> dict:
     if not response.data:
         return {}
     return response.data[0]
+
+
+def delete_video_package(package_id: str, user_id: str, access_token: str) -> bool:
+    """Delete one package owned by the signed-in user."""
+    client = get_user_client(access_token)
+    response = (
+        client.table("video_packages")
+        .delete()
+        .eq("id", package_id)
+        .eq("user_id", user_id)
+        .select("id")
+        .execute()
+    )
+    return bool(response.data)

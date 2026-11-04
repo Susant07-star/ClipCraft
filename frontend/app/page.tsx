@@ -13,6 +13,7 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [activePackageId, setActivePackageId] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -99,16 +100,25 @@ export default function Home() {
     <div className="flex h-dvh flex-col overflow-hidden md:flex-row">
       <Sidebar
         accessToken={session.access_token}
-        onSelectPackage={setActivePackageId}
+        onSelectPackage={(id) => {
+          setActivePackageId(id);
+          setProjectsOpen(false);
+        }}
+        onDeletePackage={(id) => {
+          if (activePackageId === id) setActivePackageId(null);
+        }}
         activePackageId={activePackageId}
+        isOpen={projectsOpen}
+        onClose={() => setProjectsOpen(false)}
       />
       <main className="relative min-h-0 flex-1 overflow-y-auto">
         <Dashboard
           accessToken={session.access_token}
-          isAnonymous={Boolean(session.user.is_anonymous)}
           activePackageId={activePackageId}
           onSelectPackage={setActivePackageId}
           onOpenChat={() => setChatOpen(true)}
+          projectsOpen={projectsOpen}
+          onToggleProjects={() => setProjectsOpen((open) => !open)}
         />
       </main>
       {chatOpen && (
@@ -121,7 +131,7 @@ export default function Home() {
       {!chatOpen && (
         <button
           onClick={() => setChatOpen(true)}
-          className="btn-primary fixed bottom-4 right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full text-2xl shadow-2xl md:bottom-6 md:right-6"
+          className="btn-primary fixed bottom-[calc(env(safe-area-inset-bottom)+1rem)] right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full text-2xl shadow-2xl md:bottom-6 md:right-6"
           title="Open Prompt Fix Assistant"
           aria-label="Open Prompt Fix Assistant"
         >

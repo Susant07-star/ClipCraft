@@ -1,6 +1,7 @@
 """FastAPI endpoints for authenticated ClipCraft story and production workflows."""
 
 import os
+import threading
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ load_dotenv()
 
 from agents.prompt_engineer import run_prompt_fix
 from database.supabase_client import (
+    delete_video_package,
     get_all_packages,
     get_package_by_id,
     save_video_package,
@@ -53,12 +55,22 @@ app.add_middleware(
 
 bearer_scheme = HTTPBearer(auto_error=False)
 jobs: dict[str, dict[str, Any]] = {}
+package_mutation_lock = threading.RLock()
+deleted_package_ids: set[str] = set()
+
+
+class PackageDeletedError(RuntimeError):
+    """Raised when a background workflow tries to save a deleted package."""
 
 
 class GenerateRequest(BaseModel):
-    genre: str = "Funny"
+    genre: str = ""
     language: str = "Auto"
-    video_style: str = "Hyper-Realistic"
+    video_style: str = ""
+    topic: str = ""
+    target_duration: int = 60
+    selected_platforms: list[str] = ["youtube", "tiktok", "instagram", "facebook"]
+    research_enabled: bool = True
 
 
 class StoryRevisionRequest(BaseModel):
@@ -108,6 +120,8 @@ def _package_from_state(
         "status": status,
         "language": state.get("language", "English"),
         "topic": state.get("best_topic", ""),
+        "target_duration": state.get("target_duration", 60),
+        "selected_platforms": state.get("selected_platforms", []),
         "virality_score": state.get("virality_score", 0),
         "trending_videos": state.get("trending_videos", []),
         "trend_scores": state.get("trend_scores", {}),
@@ -132,13 +146,16 @@ def _package_from_state(
 
 
 def _save_job_package(package: dict, access_token: str, user_id: str) -> dict:
-    saved = save_video_package(package, access_token)
-    if saved.get("user_id") != user_id:
-        raise RuntimeError("Supabase returned a package that does not belong to the signed-in user.")
-    job = jobs.get(package["id"])
-    if job is not None:
-        job["result"] = saved
-    return saved
+    with package_mutation_lock:
+        if package["id"] in deleted_package_ids:
+            raise PackageDeletedError("This project has been deleted.")
+        saved = save_video_package(package, access_token)
+        if saved.get("user_id") != user_id:
+            raise RuntimeError("Supabase returned a package that does not belong to the signed-in user.")
+        job = jobs.get(package["id"])
+        if job is not None:
+            job["result"] = saved
+        return saved
 
 
 def _log(job_id: str, message: str, level: str = "info") -> None:
@@ -153,10 +170,15 @@ def _log(job_id: str, message: str, level: str = "info") -> None:
 
 def _cancel_requested(job_id: str) -> bool:
     job = jobs.get(job_id)
-    return bool(job and job.get("cancel_requested"))
+    return job_id in deleted_package_ids or bool(job and job.get("cancel_requested"))
 
 
 def _mark_cancelled(job_id: str, package: dict, user_id: str, access_token: str) -> None:
+    if job_id in deleted_package_ids:
+        job = jobs.get(job_id)
+        if job is not None:
+            job["status"] = "deleted"
+        return
     package["status"] = "cancelled"
     package["generation_error"] = None
     _save_job_package(package, access_token, user_id)
@@ -167,6 +189,8 @@ def _mark_cancelled(job_id: str, package: dict, user_id: str, access_token: str)
 
 
 def _set_failed(job_id: str, package: dict, user_id: str, access_token: str, error: Exception) -> None:
+    if job_id in deleted_package_ids:
+        return
     message = f"{type(error).__name__}: {error}"
     job = jobs.get(job_id)
     if job is not None:
@@ -207,15 +231,19 @@ def run_story_pipeline_job(
     language: str,
     video_style: str,
     genre: str,
+    topic: str,
+    target_duration: int,
+    selected_platforms: list[str],
+    research_enabled: bool,
 ) -> None:
     """Generate and review a story, then persist it for the creator's decision."""
     job = jobs[package_id]
     job["status"] = "running"
-    state = create_initial_state(language, video_style, genre)
+    state = create_initial_state(language, video_style, genre, topic, target_duration, selected_platforms, research_enabled)
     package = _package_from_state(package_id, user_id, state, "generating_story")
     _log(package_id, "Story generation started")
     try:
-        for update in run_pipeline_stream(language, video_style, genre):
+        for update in run_pipeline_stream(language, video_style, genre, topic, target_duration, selected_platforms, research_enabled):
             if _cancel_requested(package_id):
                 package["workflow_state"] = state
                 _mark_cancelled(package_id, package, user_id, access_token)
@@ -306,6 +334,7 @@ def run_production_job(
                 return
             for node_name, state_update in update.items():
                 state.update(state_update)
+                state["completed_steps"] = list(dict.fromkeys(state.get("completed_steps", []) + [node_name]))
                 package["workflow_state"] = state
                 package.update({
                     "characters": state.get("characters", []),
@@ -340,29 +369,46 @@ def generate_video_package(
 ):
     if request.language not in ["Auto", "English", "Hindi", "Nepali"]:
         raise HTTPException(status_code=400, detail="Language must be 'Auto', 'English', 'Hindi', or 'Nepali'.")
+    if len(request.topic.strip()) > 1000:
+        raise HTTPException(status_code=400, detail="Story briefs can be up to 1000 characters.")
+    if request.target_duration not in [30, 40, 50, 60, 70, 80, 90]:
+        raise HTTPException(status_code=400, detail="Target duration must be between 30 and 90 seconds in 10-second steps.")
+    allowed_platforms = {"youtube", "tiktok", "instagram", "facebook"}
+    if not request.selected_platforms or set(request.selected_platforms) - allowed_platforms:
+        raise HTTPException(status_code=400, detail="Choose at least one supported publishing platform.")
 
     package_id = str(uuid.uuid4())
     language = request.language
-    initial_state = create_initial_state(language, request.video_style, request.genre)
+    initial_state = create_initial_state(language, request.video_style, request.genre, request.topic.strip(), request.target_duration, request.selected_platforms, request.research_enabled)
     package = _package_from_state(package_id, user["id"], initial_state, "generating_story")
     try:
-        saved = save_video_package(package, user["access_token"])
+        with package_mutation_lock:
+            saved = save_video_package(package, user["access_token"])
+            if saved.get("user_id") != user["id"]:
+                raise HTTPException(status_code=503, detail="Supabase did not confirm ownership of the saved draft.")
+            jobs[package_id] = {
+                "owner_id": user["id"],
+                "status": "queued",
+                "result": saved,
+                "error": None,
+                "cancel_requested": False,
+                "logs": [],
+            }
+    except HTTPException:
+        raise
     except Exception as error:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Could not save the story draft. Verify Supabase configuration and apply the authenticated schema: {type(error).__name__}.",
-        ) from error
-    if saved.get("user_id") != user["id"]:
-        raise HTTPException(status_code=503, detail="Supabase did not confirm ownership of the saved draft.")
+        diagnostic_parts = [f"{type(error).__name__}: {error}"]
+        for field in ("code", "message", "details", "hint"):
+            value = getattr(error, field, None)
+            if value and str(value) not in diagnostic_parts[0]:
+                diagnostic_parts.append(f"{field}={value}")
+        diagnostic = " | ".join(diagnostic_parts)
+        print(f"[Supabase initial package save failed] {diagnostic}")
+        detail = "Could not save the story draft. Check the backend console for the Supabase error."
+        if os.environ.get("ENVIRONMENT", "development").lower() != "production":
+            detail = f"{detail} {diagnostic}"
+        raise HTTPException(status_code=503, detail=detail) from error
 
-    jobs[package_id] = {
-        "owner_id": user["id"],
-        "status": "queued",
-        "result": saved,
-        "error": None,
-        "cancel_requested": False,
-        "logs": [],
-    }
     background_tasks.add_task(
         run_story_pipeline_job,
         package_id,
@@ -371,6 +417,10 @@ def generate_video_package(
         language,
         request.video_style,
         request.genre,
+        request.topic.strip(),
+        request.target_duration,
+        request.selected_platforms,
+        request.research_enabled,
     )
     return {"job_id": package_id, "status": "queued"}
 
@@ -389,6 +439,8 @@ def cancel_job(job_id: str, user: dict[str, str] = Depends(_authenticated_user))
 
 @app.get("/status/{job_id}")
 def get_job_status(job_id: str, user: dict[str, str] = Depends(_authenticated_user)):
+    if job_id in deleted_package_ids:
+        raise HTTPException(status_code=404, detail="Job not found.")
     job = jobs.get(job_id)
     if job is not None:
         if job.get("owner_id") != user["id"]:
@@ -430,6 +482,27 @@ def get_package(package_id: str, user: dict[str, str] = Depends(_authenticated_u
     if not package:
         raise HTTPException(status_code=404, detail="Package not found.")
     return package
+
+
+@app.delete("/packages/{package_id}")
+def delete_package(package_id: str, user: dict[str, str] = Depends(_authenticated_user)):
+    with package_mutation_lock:
+        job = jobs.get(package_id)
+        if job is not None and job.get("owner_id") != user["id"]:
+            raise HTTPException(status_code=404, detail="Package not found.")
+        deleted_package_ids.add(package_id)
+        try:
+            deleted = delete_video_package(package_id, user["id"], user["access_token"])
+        except Exception as error:
+            deleted_package_ids.discard(package_id)
+            raise HTTPException(status_code=503, detail="Could not delete this project. Please try again.") from error
+        if not deleted:
+            deleted_package_ids.discard(package_id)
+            raise HTTPException(status_code=404, detail="Package not found.")
+        if job is not None:
+            job["cancel_requested"] = True
+            job["status"] = "deleted"
+    return {"deleted": True, "id": package_id}
 
 
 @app.post("/packages/{package_id}/revise")
@@ -559,6 +632,29 @@ def approve_story(
         saved,
         state,
     )
+    return {"job_id": package_id, "status": "queued"}
+
+
+@app.post("/packages/{package_id}/retry-production")
+def retry_production(
+    package_id: str,
+    background_tasks: BackgroundTasks,
+    user: dict[str, str] = Depends(_authenticated_user),
+):
+    package = get_package_by_id(package_id, user["id"], user["access_token"])
+    if not package:
+        raise HTTPException(status_code=404, detail="Package not found.")
+    if not package.get("story_approved") or not isinstance(package.get("workflow_state"), dict):
+        raise HTTPException(status_code=409, detail="Only an approved story can retry production.")
+    state = dict(package["workflow_state"])
+    state["story_approved"] = True
+    package.update({"status": "generating_assets", "generation_error": None})
+    try:
+        saved = _save_job_package(package, user["access_token"], user["id"])
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Could not save the production retry.") from error
+    jobs[package_id] = {"owner_id": user["id"], "status": "queued", "result": saved, "error": None, "cancel_requested": False, "logs": []}
+    background_tasks.add_task(run_production_job, package_id, user["id"], user["access_token"], saved, state)
     return {"job_id": package_id, "status": "queued"}
 
 

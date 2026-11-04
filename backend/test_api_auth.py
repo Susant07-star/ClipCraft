@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from main import _package_from_state, app
+from main import PackageDeletedError, _package_from_state, _save_job_package, app
 from graph.workflow import create_initial_state
 
 
@@ -18,6 +18,65 @@ class AuthenticatedApiTests(unittest.TestCase):
     def test_package_history_requires_a_supabase_session(self):
         response = self.client.get("/packages")
         self.assertEqual(response.status_code, 401)
+
+    @patch("main.delete_video_package", return_value=True)
+    @patch("main.verify_access_token", return_value="user-123")
+    def test_owner_can_delete_a_package(self, _verify_token, delete_package):
+        with patch("main.deleted_package_ids", set()), patch("main.jobs", {}):
+            response = self.client.delete(
+                "/packages/package-123",
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"deleted": True, "id": "package-123"})
+        delete_package.assert_called_once()
+        self.assertEqual(delete_package.call_args.args[:2], ("package-123", "user-123"))
+
+    @patch("main.delete_video_package", return_value=False)
+    @patch("main.verify_access_token", return_value="user-123")
+    def test_delete_returns_not_found_for_a_package_not_owned_by_user(self, _verify_token, delete_package):
+        with patch("main.deleted_package_ids", set()), patch("main.jobs", {}):
+            response = self.client.delete(
+                "/packages/package-123",
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        self.assertEqual(response.status_code, 404)
+        delete_package.assert_called_once()
+
+    @patch("main.delete_video_package", return_value=True)
+    @patch("main.verify_access_token", return_value="user-123")
+    def test_deleting_a_running_package_cancels_its_job(self, _verify_token, _delete_package):
+        jobs = {
+            "package-123": {
+                "owner_id": "user-123",
+                "status": "running",
+                "cancel_requested": False,
+            }
+        }
+        with patch("main.deleted_package_ids", set()), patch("main.jobs", jobs):
+            response = self.client.delete(
+                "/packages/package-123",
+                headers={"Authorization": "Bearer test-token"},
+            )
+            status_response = self.client.get(
+                "/status/package-123",
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(jobs["package-123"]["cancel_requested"])
+        self.assertEqual(jobs["package-123"]["status"], "deleted")
+        self.assertEqual(status_response.status_code, 404)
+
+    def test_background_jobs_cannot_resave_a_deleted_package(self):
+        package = {"id": "package-123", "user_id": "user-123"}
+        with patch("main.deleted_package_ids", {"package-123"}), patch("main.save_video_package") as save_package:
+            with self.assertRaises(PackageDeletedError):
+                _save_job_package(package, "test-token", "user-123")
+
+        save_package.assert_not_called()
 
     def test_ai_review_approval_is_not_creator_approval(self):
         state = create_initial_state()
@@ -49,7 +108,7 @@ class AuthenticatedApiTests(unittest.TestCase):
     ):
         response = self.client.post(
             "/generate",
-            json={"language": "English"},
+            json={"topic": ""},
             headers={"Authorization": "Bearer test-token"},
         )
 
@@ -61,6 +120,21 @@ class AuthenticatedApiTests(unittest.TestCase):
         self.assertEqual(payload["characters"], [])
         self.assertEqual(payload["video_clips"], [])
         self.assertEqual(payload["seo_metadata"], {})
+        self.assertTrue(payload["workflow_state"]["research_enabled"])
+        self.assertEqual(payload["workflow_state"]["language"], "Auto")
+        self.assertEqual(payload["workflow_state"]["genre"], "")
+        self.assertEqual(payload["workflow_state"]["video_style"], "")
+        self.assertEqual(payload["workflow_state"]["creator_topic"], "")
+
+    @patch("main.verify_access_token", return_value="user-123")
+    def test_generation_rejects_story_briefs_over_1000_characters(self, _verify_token):
+        response = self.client.post(
+            "/generate",
+            json={"topic": "A" * 1001},
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        self.assertEqual(response.status_code, 400)
 
     @patch("main.run_production_job")
     @patch("main.save_video_package", side_effect=lambda package, _token: package)

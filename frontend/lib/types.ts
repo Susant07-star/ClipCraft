@@ -48,6 +48,8 @@ export interface VideoPackage {
   status: string;
   language: string;
   topic: string;
+  target_duration: number;
+  selected_platforms: string[];
   story: string;
   virality_score: number;
   review_pass_count: number;
@@ -59,6 +61,7 @@ export interface VideoPackage {
   story_versions: StoryVersion[];
   workflow_state: {
     reviewer_feedback?: string | null;
+    completed_steps?: string[];
     [key: string]: unknown;
   };
   trending_videos: TrendingVideo[];
@@ -71,7 +74,6 @@ export interface VideoPackage {
   thumbnail_prompt: string;
   seo_metadata: Record<string, PlatformMetadata | undefined>;
   generation_error?: string | null;
-  completed_steps?: string[];
 }
 
 export interface WorkflowJob {

@@ -31,6 +31,10 @@ class VideoPackageState(TypedDict):
     genre: str
     language: str
     video_style: str
+    target_duration: int
+    selected_platforms: list[str]
+    creator_topic: str
+    research_enabled: bool
     story: str
     revision_count: int
     review_pass_count: int
@@ -136,6 +140,10 @@ def create_initial_state(
     language: str = "English",
     video_style: str = "Hyper-Realistic",
     genre: str = "Funny",
+    topic: str = "",
+    target_duration: int = 60,
+    selected_platforms: list[str] | None = None,
+    research_enabled: bool = True,
 ) -> VideoPackageState:
     return {
         "trending_videos": [],
@@ -150,6 +158,10 @@ def create_initial_state(
         "genre": genre,
         "language": language,
         "video_style": video_style,
+        "target_duration": target_duration,
+        "selected_platforms": selected_platforms or ["youtube", "tiktok", "instagram", "facebook"],
+        "creator_topic": topic.strip(),
+        "research_enabled": research_enabled,
         "story": "",
         "revision_count": 0,
         "review_pass_count": 0,
@@ -176,9 +188,9 @@ def run_full_pipeline(language: str = "English", video_style: str = "Hyper-Reali
     return final_state
 
 
-def run_pipeline_stream(language: str = "English", video_style: str = "Hyper-Realistic", genre: str = "Funny"):
+def run_pipeline_stream(language: str = "English", video_style: str = "Hyper-Realistic", genre: str = "Funny", topic: str = "", target_duration: int = 60, selected_platforms: list[str] | None = None, research_enabled: bool = True):
     """Run story generation and AI review, stopping before any production assets."""
-    initial_state = create_initial_state(language, video_style, genre)
+    initial_state = create_initial_state(language, video_style, genre, topic, target_duration, selected_platforms, research_enabled)
     yield from story_app.stream(initial_state, stream_mode="updates")
 
 

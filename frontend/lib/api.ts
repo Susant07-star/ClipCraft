@@ -6,11 +6,11 @@ function authHeaders(accessToken: string) {
   return { Authorization: `Bearer ${accessToken}` };
 }
 
-export async function generatePackage(accessToken: string, language: string, videoStyle: string, genre: string): Promise<{ job_id: string; status: string }> {
+export async function generatePackage(accessToken: string, language: string, videoStyle: string, genre: string, topic: string, targetDuration: number, selectedPlatforms: string[], researchEnabled: boolean): Promise<{ job_id: string; status: string }> {
   const res = await fetch(`${API_URL}/generate`, {
     method: "POST",
     headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
-    body: JSON.stringify({ language, video_style: videoStyle, genre }),
+    body: JSON.stringify({ language, video_style: videoStyle, genre, topic, target_duration: targetDuration, selected_platforms: selectedPlatforms, research_enabled: researchEnabled }),
   });
   if (!res.ok) throw new Error(await readError(res, "Failed to start generation."));
   return res.json();
@@ -40,6 +40,14 @@ export async function fetchPackageById(accessToken: string, id: string): Promise
   return res.json();
 }
 
+export async function deletePackage(accessToken: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/packages/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(accessToken),
+  });
+  if (!res.ok) throw new Error(await readError(res, "Failed to delete project."));
+}
+
 export async function reviseStory(accessToken: string, packageId: string, story: string, changeRequest: string): Promise<{ job_id: string; status: string; story_version: number }> {
   const res = await fetch(`${API_URL}/packages/${packageId}/revise`, {
     method: "POST",
@@ -56,6 +64,15 @@ export async function approveStory(accessToken: string, packageId: string): Prom
     headers: authHeaders(accessToken),
   });
   if (!res.ok) throw new Error(await readError(res, "Failed to approve story."));
+  return res.json();
+}
+
+export async function retryProduction(accessToken: string, packageId: string): Promise<{ job_id: string; status: string }> {
+  const res = await fetch(`${API_URL}/packages/${packageId}/retry-production`, {
+    method: "POST",
+    headers: authHeaders(accessToken),
+  });
+  if (!res.ok) throw new Error(await readError(res, "Failed to retry production."));
   return res.json();
 }
 

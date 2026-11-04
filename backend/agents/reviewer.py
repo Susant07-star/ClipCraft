@@ -21,7 +21,11 @@ load_dotenv()
 MAX_REVIEW_PASSES = 3
 
 REVIEWER_SYSTEM_PROMPT = """You are a strict video content quality reviewer and platform policy expert.
-Your job is to evaluate a short-form video script (70-90 seconds) on two dimensions:
+Your job is to evaluate a short-form video script for fit with the creator's brief, editorial quality, and policy compliance:
+
+== GENRE AND BRIEF MATCH ==
+If the creator selected a genre, treat it as the primary creative constraint. Check that the hook, main conflict, emotional tone, and ending consistently fit it. If the requested genre is Funny, a story whose main effect is sadness or melodrama does not match, even if it is well written.
+If no genre was selected, check that the story follows the tone and direction in the creator's brief. Do not require a specific genre when none was chosen.
 
 == VIRALITY SCORE (1-10) ==
 Score the story on:
@@ -62,6 +66,7 @@ def run_reviewer(state: dict) -> dict:
     Counts review passes independently from story-writer runs.
     """
     story = state.get("story", "")
+    genre = state.get("genre") or ""
     review_pass_count = state.get("review_pass_count", 0)
 
     if review_pass_count >= MAX_REVIEW_PASSES:
@@ -76,9 +81,14 @@ def run_reviewer(state: dict) -> dict:
     review_pass_count += 1
     print(f"🔍 [Reviewer] Reviewing story (pass #{review_pass_count})...")
 
+    genre_review_instruction = (
+        f"Requested genre (must match): {genre}\n\nReview genre consistency as a required approval criterion, in addition to quality and policy. If it is off-genre, reject it and give specific feedback to bring the rewrite back to {genre}."
+        if genre
+        else f"No genre was selected. Review the story for quality and policy, and check that it follows the creator's story brief; do not require a specific genre.\n\nCreator's story brief:\n{state.get('creator_topic', '')}"
+    )
     messages = [
         SystemMessage(content=REVIEWER_SYSTEM_PROMPT),
-        HumanMessage(content=f"Review this story:\n\n{story}"),
+        HumanMessage(content=f"{genre_review_instruction}\n\nStory:\n{story}"),
     ]
 
     response = robust_llm_invoke(messages, temperature=0.1)

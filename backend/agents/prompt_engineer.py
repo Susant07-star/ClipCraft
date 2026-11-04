@@ -62,11 +62,17 @@ def run_prompt_engineer(state: dict) -> dict:
     LangGraph node: Converts the approved story into video and thumbnail prompts.
     """
     story = state.get("story", "")
+    creator_brief = state.get("creator_topic", "")
     characters = state.get("characters", [])
     language = state.get("language", "English")
-    video_style = state.get("video_style", "Hyper-Realistic")
+    video_style = state.get("video_style") or ""
+    style_instruction = (
+        f'Ensure all visual descriptions consistently describe a "{video_style}" visual style.'
+        if video_style
+        else "Follow any visual style direction in the creator's brief; if none is given, choose a coherent style that fits the story."
+    )
 
-    print(f"🎬 [Prompt Engineer] Building cinematic video prompts (Style: {video_style})...")
+    print(f"🎬 [Prompt Engineer] Building cinematic video prompts (Style: {video_style or 'brief-guided'})...")
 
     # Format character context for the LLM
     char_context = ""
@@ -79,18 +85,22 @@ def run_prompt_engineer(state: dict) -> dict:
     messages = [
         SystemMessage(content=PROMPT_ENGINEER_SYSTEM_PROMPT),
         HumanMessage(
-            content=f"""Convert this story into sequential 10-second video-generation prompts.
+            content=f"""Convert this approved story into sequential video-generation prompts.
+Target total duration: {state.get('target_duration', 60)} seconds. Each clip must be exactly 10 seconds except the final clip, which may be shorter. Return exactly {((int(state.get('target_duration', 60)) + 9) // 10)} clips with gap-free time ranges starting at 0 seconds and ending at {state.get('target_duration', 60)} seconds.
 
 STORY (in {language}):
 {story}
 {char_context}
+
+CREATOR'S STORY BRIEF:
+{creator_brief}
 
 Instructions:
 - Calculate total clips needed: divide the story length by 10 seconds (70-90s story = 7-9 clips).
 - Make sure the clips tell the story in sequence.
 - For each clip, specify which character reference images the creator should attach if their chosen video tool supports them.
 - The thumbnail should capture the most viral/dramatic moment.
-- IMPORTANT ART STYLE: Ensure all visual descriptions consistently describe a "{video_style}" visual style.
+- IMPORTANT ART STYLE: {style_instruction}
 """
         ),
     ]
@@ -114,11 +124,20 @@ Instructions:
         # Accept both 'clips' and 'video_clips' keys
         clips = result.get("clips", result.get("video_clips", []))
         thumbnail_prompt = result.get("thumbnail_prompt", "")
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"⚠️ [Prompt Engineer] JSON parse error: {e}")
-        print(f"⚠️ [Prompt Engineer] Raw response was:\n{raw[:1000]}")
-        clips = []
-        thumbnail_prompt = ""
+        target_duration = int(state.get("target_duration", 60))
+        expected_count = (target_duration + 9) // 10
+        if not isinstance(clips, list) or len(clips) != expected_count or not thumbnail_prompt:
+            raise ValueError(f"Expected {expected_count} clips and a thumbnail prompt for a {target_duration}-second package.")
+        for index, clip in enumerate(clips):
+            start = index * 10
+            end = min(start + 10, target_duration)
+            clip["clip_number"] = index + 1
+            clip["time_range"] = f"{start}-{end}s"
+            for field in ("visual", "character_voice", "background_music", "sound_effects"):
+                if not isinstance(clip.get(field), str) or not clip[field].strip():
+                    raise ValueError(f"Clip {index + 1} is missing required {field} content.")
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
+        raise ValueError(f"Prompt generation returned invalid structured output: {e}") from e
 
     print(f"✅ [Prompt Engineer] Generated {len(clips)} video clips + thumbnail prompt.")
 

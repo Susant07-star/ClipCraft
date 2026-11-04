@@ -7,24 +7,164 @@ import {
   fetchPackageById,
   generatePackage,
   pollJobStatus,
+  retryProduction,
   reviseStory,
 } from "@/lib/api";
 import type { VideoPackage } from "@/lib/types";
+import { SAMPLE_PACKAGE } from "@/lib/sample-package";
 
 interface DashboardProps {
   accessToken: string;
-  isAnonymous: boolean;
   activePackageId: string | null;
-  onSelectPackage: (id: string) => void;
+  onSelectPackage: (id: string | null) => void;
   onOpenChat: () => void;
+  projectsOpen: boolean;
+  onToggleProjects: () => void;
 }
 
 type Language = "Auto" | "English" | "Hindi" | "Nepali";
 
-export default function Dashboard({ accessToken, isAnonymous, activePackageId, onSelectPackage, onOpenChat }: DashboardProps) {
+interface SelectOption {
+  value: string;
+  label: string;
+}
+
+interface CompactSelectProps {
+  id: string;
+  label: string;
+  value: string;
+  options: SelectOption[];
+  disabled: boolean;
+  isOpen: boolean;
+  onChange: (value: string) => void;
+  onOpen: (id: string) => void;
+  onClose: () => void;
+}
+
+function CompactSelect({
+  id,
+  label,
+  value,
+  options,
+  disabled,
+  isOpen,
+  onChange,
+  onOpen,
+  onClose,
+}: CompactSelectProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const selectedOption = options.find((option) => option.value === value);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    listRef.current?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus();
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) onClose();
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [isOpen, onClose]);
+
+  const handleListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const optionButtons = Array.from(
+      listRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []
+    );
+    const currentIndex = optionButtons.indexOf(document.activeElement as HTMLButtonElement);
+    let nextIndex: number | null = null;
+
+    if (event.key === "ArrowDown") nextIndex = (currentIndex + 1) % optionButtons.length;
+    if (event.key === "ArrowUp") nextIndex = (currentIndex - 1 + optionButtons.length) % optionButtons.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = optionButtons.length - 1;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      triggerRef.current?.focus();
+    }
+
+    if (nextIndex !== null && optionButtons.length > 0) {
+      event.preventDefault();
+      optionButtons[nextIndex]?.focus();
+    }
+  };
+
+  return (
+    <div ref={rootRef} className="relative min-w-0 space-y-1">
+      <span className="block text-xs font-medium text-gray-300">{label}</span>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        onClick={() => isOpen ? onClose() : onOpen(id)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            onOpen(id);
+          }
+        }}
+        aria-label={`${label}: ${selectedOption?.label ?? value}`}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        className="flex min-h-11 w-full min-w-0 items-center justify-between gap-2 rounded-lg border border-[#2a2a3d] bg-[#12121a] px-3 py-2 text-left text-sm font-medium text-white transition-colors hover:border-[#51446f] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c4b5fd] disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <span className="truncate">{selectedOption?.label ?? value}</span>
+        <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`}>
+          <path d="m5 7.5 5 5 5-5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {isOpen && (
+        <div
+          ref={listRef}
+          role="listbox"
+          aria-label={label}
+          onKeyDown={handleListKeyDown}
+          className="absolute left-0 top-full z-30 mt-2 max-h-[min(16rem,50vh)] w-full min-w-[min(12rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain rounded-xl border border-[#3a334b] bg-[#15131d] p-1.5 shadow-2xl"
+        >
+          {options.map((option) => {
+            const selected = option.value === value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                tabIndex={selected ? 0 : -1}
+                onClick={() => {
+                  onChange(option.value);
+                  onClose();
+                  triggerRef.current?.focus();
+                }}
+                className={`flex min-h-10 w-full items-center rounded-lg px-3 py-2 text-left text-sm leading-5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#c4b5fd] ${
+                  selected ? "bg-purple-500/20 text-purple-100" : "text-gray-200 hover:bg-white/5"
+                }`}
+              >
+                <span className="break-words">{option.label}</span>
+                {selected && <span aria-hidden="true" className="ml-auto pl-2 text-purple-300">✓</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function Dashboard({ accessToken, activePackageId, onSelectPackage, onOpenChat, projectsOpen, onToggleProjects }: DashboardProps) {
   const [language, setLanguage] = useState<Language>("Auto");
-  const [genre, setGenre] = useState<string>("Funny");
-  const [videoStyle, setVideoStyle] = useState<string>("Hyper-Realistic");
+  const [genre, setGenre] = useState<string>("");
+  const [videoStyle, setVideoStyle] = useState<string>("");
+  const [openSelector, setOpenSelector] = useState<string | null>(null);
+  const [topic, setTopic] = useState("");
+  const [targetDuration, setTargetDuration] = useState(60);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(["youtube", "tiktok", "instagram", "facebook"]);
+  const [researchEnabled, setResearchEnabled] = useState(true);
+  const [showSample, setShowSample] = useState(false);
   const [jobStatus, setJobStatus] = useState<string>("idle"); // idle | queued | running | completed | failed
   const [loadedPackage, setPackage] = useState<VideoPackage | null>(null);
   const [activeTab, setActiveTab] = useState("research");
@@ -33,7 +173,9 @@ export default function Dashboard({ accessToken, isAnonymous, activePackageId, o
   const [changeRequest, setChangeRequest] = useState("");
   const [workflowError, setWorkflowError] = useState("");
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
-  const package_ = loadedPackage?.id === activePackageId ? loadedPackage : null;
+  const package_ = activePackageId && loadedPackage?.id === activePackageId
+    ? loadedPackage
+    : showSample && !activePackageId ? SAMPLE_PACKAGE : null;
 
   // Load the selected, owner-scoped project.
   useEffect(() => {
@@ -44,6 +186,13 @@ export default function Dashboard({ accessToken, isAnonymous, activePackageId, o
         if (!active) return;
         setPackage(loaded);
         setStoryDraft(loaded.story || "");
+        setLanguage(loaded.language as Language);
+        setGenre((loaded.workflow_state?.genre as string) || "Funny");
+        setVideoStyle((loaded.workflow_state?.video_style as string) || "Hyper-Realistic");
+        setTopic((loaded.workflow_state?.creator_topic as string) || loaded.topic || "");
+        setTargetDuration(loaded.target_duration || 60);
+        setSelectedPlatforms(loaded.selected_platforms?.length ? loaded.selected_platforms : ["youtube", "tiktok", "instagram", "facebook"]);
+        setResearchEnabled(Boolean(loaded.workflow_state?.research_enabled));
         setJobStatus(loaded.status || "idle");
         setActiveTab(loaded.story_approved ? "characters" : "story");
       })
@@ -92,16 +241,57 @@ export default function Dashboard({ accessToken, isAnonymous, activePackageId, o
   useEffect(() => () => { if (pollingRef.current) clearInterval(pollingRef.current); }, []);
 
   const handleGenerate = async () => {
+    if (!selectedPlatforms.length) {
+      setWorkflowError("Choose at least one publishing platform.");
+      return;
+    }
     try {
+      setShowSample(false);
       setWorkflowError("");
       setJobStatus("queued");
       setPackage(null);
-      const { job_id } = await generatePackage(accessToken, language, videoStyle, genre);
+      const { job_id } = await generatePackage(accessToken, language, videoStyle, genre, topic.trim(), targetDuration, selectedPlatforms, researchEnabled);
       startPolling(job_id);
     } catch (error) {
       setJobStatus("failed");
       setWorkflowError(error instanceof Error ? error.message : "Could not start story generation.");
     }
+  };
+
+  const handleRetryProduction = async () => {
+    if (!package_?.id) return;
+    try {
+      setWorkflowError("");
+      const result = await retryProduction(accessToken, package_.id);
+      setJobStatus("generating_assets");
+      setPackage((current) => current ? { ...current, status: "generating_assets", generation_error: null } : current);
+      startPolling(result.job_id);
+    } catch (error) {
+      setWorkflowError(error instanceof Error ? error.message : "Could not retry production.");
+    }
+  };
+
+  const handleExport = () => {
+    if (!package_) return;
+    const content = [
+      `# ${package_.topic}`,
+      `\n${package_.target_duration || targetDuration} second short-form story package`,
+      `\n## Approved story (version ${package_.approved_story_version || package_.current_story_version})\n\n${package_.story}`,
+      "\n## Character reference prompts",
+      ...(package_.characters || []).map((character) => `\n### ${character.name} (${character.role || "character"})\n\n${character.reference_prompt}`),
+      "\n## Video prompts for external tools",
+      ...(package_.video_clips || []).map((clip) => `\n### Clip ${clip.clip_number} · ${clip.time_range}\n\nVisual: ${clip.visual}\n\nVoice: ${clip.character_voice}\n\nMusic: ${clip.background_music}\n\nSound effects: ${clip.sound_effects}`),
+      `\n## Thumbnail prompt\n\n${package_.thumbnail_prompt || "Not generated"}`,
+      "\n## Publishing metadata",
+      ...Object.entries(package_.seo_metadata || {}).map(([platform, metadata]) => `\n### ${platform}\n\n${JSON.stringify(metadata, null, 2)}`),
+      "\n---\nPrompts and metadata only. ClipCraft did not render image or video files or publish this package.",
+    ].join("\n");
+    const blobUrl = URL.createObjectURL(new Blob([content], { type: "text/markdown;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = `${(package_.topic || "clipcraft-package").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "clipcraft-package"}.md`;
+    link.click();
+    URL.revokeObjectURL(blobUrl);
   };
 
   const handleApproveStory = async () => {
@@ -155,95 +345,201 @@ export default function Dashboard({ accessToken, isAnonymous, activePackageId, o
   const canApproveStory = package_?.status !== undefined
     && ["awaiting_approval", "needs_creator_review"].includes(package_.status);
   const canReviseStory = package_?.story && !isGenerating;
+  const storyWordCount = storyDraft.trim() ? storyDraft.trim().split(/\s+/).length : 0;
+  const estimatedSpeechSeconds = Math.round((storyWordCount / 150) * 60);
+  const isViewingProject = Boolean(activePackageId || showSample);
+
+  const handleNewStory = () => {
+    setPackage(null);
+    setStoryDraft("");
+    setChangeRequest("");
+    setTopic("");
+    setLanguage("Auto");
+    setGenre("");
+    setVideoStyle("");
+    setTargetDuration(60);
+    setSelectedPlatforms(["youtube", "tiktok", "instagram", "facebook"]);
+    setResearchEnabled(true);
+    setShowSample(false);
+    setJobStatus("idle");
+    setActiveTab("research");
+    setWorkflowError("");
+    setOpenSelector(null);
+    onSelectPackage(null);
+  };
 
   return (
     <div className="min-h-full">
       {/* Top Header */}
-      <div className="sticky top-0 z-10 flex flex-col gap-4 border-b border-[#2a2a3d] px-4 py-4 md:flex-row md:items-center md:justify-between md:px-8" style={{ background: "rgba(10,10,15,0.9)", backdropFilter: "blur(12px)" }}>
-        <div>
-          <h1 className="text-xl font-bold gradient-text">ClipCraft Studio</h1>
-          <p className="mt-0.5 text-xs" style={{ color: "#6b7280" }}>Create and review short-form stories before production</p>
-          <div className="mt-2 flex items-center gap-3 text-xs text-gray-400">
-            <span>{isAnonymous ? "Guest session · saved in this browser" : "Private session"}</span>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center md:justify-end">
-          {/* Language selector */}
-          <select
+      <div className="sticky top-0 z-10 grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-x-3 gap-y-4 border-b border-[#2a2a3d] px-4 py-4 md:px-6 lg:px-8" style={{ background: "rgba(10,10,15,0.9)", backdropFilter: "blur(12px)" }}>
+        <button
+          type="button"
+          onClick={onToggleProjects}
+          className="col-start-1 row-start-1 flex h-11 w-11 items-center justify-center rounded-lg border border-[#2a2a3d] text-gray-200 transition-colors hover:bg-[#1a1a28] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c4b5fd] md:hidden"
+          aria-label={projectsOpen ? "Close projects panel" : "Open projects panel"}
+          aria-expanded={projectsOpen}
+          aria-controls="projects-sidebar"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" className="h-6 w-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <h1 className="col-start-2 row-start-1 min-w-0 text-center text-xl font-bold gradient-text">ClipCraft Studio</h1>
+        <span className="col-start-3 row-start-1" aria-hidden="true" />
+        <div className="col-span-3 row-start-2 grid grid-cols-2 items-end gap-x-3 gap-y-2 xl:grid-cols-4 xl:gap-x-2">
+          <CompactSelect
+            id="language"
+            label="Language"
             value={language}
-            onChange={(e) => setLanguage(e.target.value as Language)}
+            options={[
+              { value: "Auto", label: "Auto (Best Market)" },
+              { value: "English", label: "English" },
+              { value: "Hindi", label: "Hindi" },
+              { value: "Nepali", label: "Nepali" },
+            ]}
             disabled={isGenerating}
-            className="min-h-11 min-w-0 rounded-lg border border-[#2a2a3d] px-3 py-2 text-sm font-medium focus:border-[#7c3aed] focus:outline-none"
-            style={{ background: "#12121a", color: "white" }}
-          >
-            <option value="Auto">🌍 Auto (Best Market)</option>
-            <option value="English">🇬🇧 English</option>
-            <option value="Hindi">🇮🇳 Hindi</option>
-            <option value="Nepali">🇳🇵 Nepali</option>
-          </select>
+            isOpen={openSelector === "language"}
+            onChange={(value) => setLanguage(value as Language)}
+            onOpen={setOpenSelector}
+            onClose={() => setOpenSelector(null)}
+          />
 
-          {/* Genre selector */}
-          <select
+          <CompactSelect
+            id="genre"
+            label="Genre"
             value={genre}
-            onChange={(e) => setGenre(e.target.value)}
+            options={[
+              { value: "", label: "Choose a genre" },
+              { value: "Funny", label: "Funny" },
+              { value: "Horror", label: "Horror" },
+              { value: "Sci-Fi", label: "Sci-Fi" },
+              { value: "Mystery", label: "Mystery" },
+              { value: "Sad", label: "Sad" },
+              { value: "Opposite World Funny", label: "Opposite World Funny" },
+              { value: "Cute Kid Funny", label: "Cute Kid Funny" },
+              { value: "Fruits & Veggies Funny", label: "Fruits & Veggies Funny" },
+              { value: "Fruits & Veggies Emotion", label: "Fruits & Veggies Emotional" },
+            ]}
             disabled={isGenerating}
-            className="min-h-11 min-w-0 rounded-lg border border-[#2a2a3d] px-3 py-2 text-sm font-medium focus:border-[#7c3aed] focus:outline-none"
-            style={{ background: "#12121a", color: "white" }}
-          >
-            <option value="Funny">😂 Funny</option>
-            <option value="Horror">👻 Horror</option>
-            <option value="Sci-Fi">👽 Sci-Fi</option>
-            <option value="Mystery">🕵️ Mystery</option>
-            <option value="Sad">😢 Sad</option>
-            <option value="Opposite World Funny">🙃 Opposite World Funny</option>
-            <option value="Cute Kid Funny">👶 Cute Kid Funny</option>
-            <option value="Fruits & Veggies Funny">🍎 Fruits & Veggies Funny</option>
-            <option value="Fruits & Veggies Emotion">🍅 Fruits & Veggies Emotional</option>
-          </select>
+            isOpen={openSelector === "genre"}
+            onChange={setGenre}
+            onOpen={setOpenSelector}
+            onClose={() => setOpenSelector(null)}
+          />
 
-          {/* Style selector */}
-          <select
+          <CompactSelect
+            id="style"
+            label="Visual style"
             value={videoStyle}
-            onChange={(e) => setVideoStyle(e.target.value)}
+            options={[
+              { value: "", label: "Choose a visual style" },
+              { value: "Hyper-Realistic", label: "Hyper-Realistic" },
+              { value: "3D Pixar Animation", label: "3D Pixar Animation" },
+              { value: "Anime / Studio Ghibli", label: "Anime / Ghibli" },
+              { value: "Dark Cinematic", label: "Dark Cinematic" },
+            ]}
             disabled={isGenerating}
-            className="min-h-11 min-w-0 rounded-lg border border-[#2a2a3d] px-3 py-2 text-sm font-medium focus:border-[#7c3aed] focus:outline-none"
-            style={{ background: "#12121a", color: "white" }}
-          >
-            <option value="Hyper-Realistic">🎥 Hyper-Realistic</option>
-            <option value="3D Pixar Animation">🧸 3D Pixar Animation</option>
-            <option value="Anime / Studio Ghibli">🌸 Anime / Ghibli</option>
-            <option value="Dark Cinematic">🌑 Dark Cinematic</option>
-          </select>
+            isOpen={openSelector === "style"}
+            onChange={setVideoStyle}
+            onOpen={setOpenSelector}
+            onClose={() => setOpenSelector(null)}
+          />
 
           {/* Generate button */}
-          <button onClick={handleGenerate} disabled={isGenerating} className="btn-primary col-span-2 flex min-h-11 items-center justify-center gap-2 text-sm sm:col-span-1">
+          <button
+            type="button"
+            onClick={isViewingProject ? handleNewStory : handleGenerate}
+            disabled={isGenerating || (!isViewingProject && selectedPlatforms.length === 0)}
+            className="btn-primary col-span-2 flex min-h-11 items-center justify-center gap-2 text-sm xl:col-span-1"
+          >
             {isGenerating ? (
               <>
-                <span className="pulse-dot w-2 h-2 rounded-full bg-white inline-block" />
-                {jobStatus === "queued" ? "Queued..." : "Generating..."}
+                <span className="pulse-dot inline-block h-2 w-2 rounded-full bg-white" />
+                Generating...
+              </>
+            ) : isViewingProject ? (
+              <>
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" className="h-5 w-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                New story
               </>
             ) : (
-              <><span>✦</span> New story</>
+              <>
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" className="h-5 w-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z" />
+                  <path d="m19 15 .9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z" />
+                </svg>
+                Generate story
+              </>
             )}
           </button>
         </div>
       </div>
 
-      <div className="p-4 md:p-8">
+      <div className="space-y-5 p-4 pb-[calc(2rem+env(safe-area-inset-bottom))] md:p-8">
         {workflowError && (
           <div role="alert" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
             <span>{workflowError}</span>
             <button type="button" onClick={() => setWorkflowError("")} className="min-h-11 rounded-lg px-3 text-white hover:bg-red-500/20">Dismiss</button>
           </div>
         )}
+        <section className="card space-y-4 p-4 md:p-6" aria-labelledby="creative-brief-title">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 id="creative-brief-title" className="text-base font-semibold">Creative brief</h2>
+              <p className="mt-1 text-sm text-gray-400">Your topic guides the story, and YouTube and public-web research add context.</p>
+            </div>
+            <span className="badge badge-green">Short-form · 30–90 sec</span>
+          </div>
+          <label className="block space-y-2 text-sm font-medium">
+            <span>Story idea <span className="text-gray-400">(optional)</span></span>
+            <textarea
+              value={topic}
+              onChange={(event) => setTopic(event.target.value)}
+              maxLength={1000}
+              rows={5}
+              disabled={isGenerating}
+              placeholder="Share a premise, characters, key events, or ending—or leave blank and let AI invent a story."
+              className="min-h-36 w-full resize-y rounded-xl border border-[#2a2a3d] bg-[#0a0a0f] px-4 py-3 text-base leading-relaxed text-white focus:border-purple-500 focus:outline-none"
+            />
+            <span className="block text-xs leading-relaxed text-gray-400">
+              Optional: add any story details or tone/style direction. Leave blank and AI will create a fresh story using your selected genre, visual style, language, and duration. {topic.length}/1000
+            </span>
+          </label>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label className="block space-y-2 text-sm font-medium">
+              <span>Target duration</span>
+              <select value={targetDuration} onChange={(event) => setTargetDuration(Number(event.target.value))} disabled={isGenerating} className="min-h-11 w-full rounded-xl border border-[#2a2a3d] bg-[#0a0a0f] px-3 text-base text-white focus:border-purple-500 focus:outline-none">
+                {[30, 40, 50, 60, 70, 80, 90].map((seconds) => <option key={seconds} value={seconds}>{seconds} seconds · {Math.ceil(seconds / 10)} clips</option>)}
+              </select>
+            </label>
+            <fieldset className="space-y-2 text-sm font-medium">
+              <legend>Prepare metadata for</legend>
+              <div className="flex min-h-11 flex-wrap items-center gap-x-4 gap-y-2">
+                {[{ id: "youtube", label: "YouTube Shorts" }, { id: "tiktok", label: "TikTok" }, { id: "instagram", label: "Instagram Reels" }, { id: "facebook", label: "Facebook Reels" }].map((platform) => (
+                  <label key={platform.id} className="inline-flex min-h-11 items-center gap-2 text-sm text-gray-300">
+                    <input type="checkbox" checked={selectedPlatforms.includes(platform.id)} disabled={isGenerating} onChange={(event) => setSelectedPlatforms((current) => event.target.checked ? [...current, platform.id] : current.filter((item) => item !== platform.id))} className="h-4 w-4 accent-purple-500" />
+                    {platform.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          </div>
+          <label className="inline-flex min-h-11 items-center gap-3 text-sm text-gray-300">
+            <input type="checkbox" checked={researchEnabled} disabled={isGenerating} onChange={(event) => setResearchEnabled(event.target.checked)} className="h-4 w-4 accent-purple-500" />
+            Add YouTube and public web research to inform your story
+          </label>
+        </section>
         {/* Empty state */}
         {!package_ && !isGenerating && (
           <div className="flex flex-col items-center justify-center h-96 text-center">
             <div className="text-6xl mb-4">🎬</div>
             <h2 className="text-2xl font-bold gradient-text mb-2">Ready to Create</h2>
             <p className="max-w-md text-sm leading-relaxed" style={{ color: "#6b7280" }}>
-              Choose a style and start a story. Review and approve it before ClipCraft generates production prompts.
+              Add an idea above, or leave it blank and let AI create a story from your choices. Review and approve it before ClipCraft prepares production prompts.
             </p>
+            <button type="button" onClick={() => setShowSample(true)} className="mt-2 min-h-11 rounded-xl px-5 text-sm text-gray-300 underline decoration-gray-600 underline-offset-4 hover:text-white">Explore a labeled sample package</button>
           </div>
         )}
 
@@ -260,7 +556,7 @@ export default function Dashboard({ accessToken, isAnonymous, activePackageId, o
                 { id: "story_writer", label: "Writing your story" },
                 { id: "reviewer", label: "Reviewing & refining" },
               ].map((step, i) => {
-                const isCompleted = package_?.completed_steps?.includes(step.id);
+                const isCompleted = package_?.workflow_state?.completed_steps?.includes(step.id);
                 return (
                   <div key={step.id} className="flex items-center gap-3">
                     {isCompleted ? (
@@ -284,13 +580,15 @@ export default function Dashboard({ accessToken, isAnonymous, activePackageId, o
         {/* Package result */}
         {package_ && (package_.topic || package_.story) && (
           <div className="fade-in space-y-6">
+            {showSample && <div className="rounded-xl border border-sky-300/20 bg-sky-300/5 p-4 text-sm text-sky-100"><strong>Sample package.</strong> This fixture is illustrative; no live model generation, research, or image/video rendering occurred.</div>}
             {/* Package header */}
-            <div className="card p-6">
+            <div className="card p-4 md:p-6">
               <div className="flex items-start justify-between flex-wrap gap-4">
                 <div>
                   <h2 className="text-lg font-bold">{package_.topic}</h2>
                   <div className="flex items-center gap-3 mt-2 flex-wrap">
                     <span className="tag">{package_.language}</span>
+                    <span className="tag">{String(package_.workflow_state?.genre || genre)}</span>
                     <span className="tag">{package_.video_clips?.length || 0} clips</span>
                     {package_.virality_score > 0 && (
                       <span className={`badge ${package_.virality_score >= 8 ? "badge-green" : package_.virality_score >= 6 ? "badge-yellow" : "badge-red"}`}>
@@ -301,15 +599,23 @@ export default function Dashboard({ accessToken, isAnonymous, activePackageId, o
                   </div>
                 </div>
                 {package_.story_approved && (
-                  <button onClick={onOpenChat} className="btn-primary flex min-h-11 items-center gap-2 text-sm">
-                    Fix an external-tool prompt
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={handleExport} className="min-h-11 rounded-xl border border-[#2a2a3d] px-4 text-sm text-gray-200 hover:border-purple-400">Download package</button>
+                    <button onClick={onOpenChat} className="btn-primary min-h-11 text-sm">Fix a prompt</button>
+                  </div>
                 )}
               </div>
               <p className="mt-3 text-xs leading-relaxed text-gray-400">
                 Editorial scores are review heuristics, not predictions of reach or performance.
               </p>
             </div>
+
+            {package_.generation_error && (
+              <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-100">
+                <div><strong>Production stopped.</strong> {package_.generation_error}</div>
+                {package_.story_approved && <button type="button" onClick={handleRetryProduction} className="min-h-11 rounded-lg border border-red-200/40 px-4 font-semibold hover:bg-red-500/20">Retry production kit</button>}
+              </div>
+            )}
 
             {/* Tabs */}
             <div className="flex w-fit max-w-full flex-wrap gap-1 rounded-xl border border-[#2a2a3d] p-1" style={{ background: "#12121a" }}>
@@ -335,21 +641,26 @@ export default function Dashboard({ accessToken, isAnonymous, activePackageId, o
             {/* Research tab */}
             {activeTab === "research" && (
               <div className="space-y-4">
+                {package_.research_brief?.status === "skipped" ? (
+                  <div className="rounded-xl border border-sky-300/20 bg-sky-300/5 p-4 text-sm text-sky-100">Research was skipped for this package. The story uses your topic directly; no trend or source claims were added.</div>
+                ) : package_.research_errors?.length ? (
+                  <div role="status" className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-4 text-sm text-amber-100">Some research sources were unavailable. The creator topic is still used for the story. {package_.research_errors.map((error, index) => <p key={index} className="mt-2">{String(error.stage || "Source")}: {String(error.message || "request failed")}</p>)}</div>
+                ) : null}
                 <div className="card p-6 space-y-4">
-                  <h3 className="font-semibold text-base">📊 Market Trend Analysis</h3>
-                  <div className="grid grid-cols-2 gap-4">
+                  <h3 className="font-semibold text-base">Research context and source signals</h3>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div className="p-4 rounded-lg" style={{ background: "#0a0a0f" }}>
                       <div className="text-xs mb-1" style={{ color: "#6b7280" }}>Winning Topic</div>
                       <div className="text-sm font-semibold gradient-text">{package_.topic}</div>
                     </div>
                     <div className="p-4 rounded-lg" style={{ background: "#0a0a0f" }}>
-                      <div className="text-xs mb-1" style={{ color: "#6b7280" }}>Trend Score (Last 7 Days)</div>
-                      <div className="text-sm font-semibold">{package_.trend_scores?.[package_.topic] || "N/A"}/100</div>
+                      <div className="text-xs mb-1" style={{ color: "#6b7280" }}>Google Trends score</div>
+                      <div className="text-sm font-semibold">{package_.research_brief?.status === "skipped" ? "Research skipped" : (package_.trend_scores?.[package_.topic] ?? "No score available")}</div>
                     </div>
                   </div>
                 </div>
                 
-                <h3 className="font-semibold text-base mt-6">🔥 Top Trending YouTube Videos Found</h3>
+                <h3 className="font-semibold text-base mt-6">Public YouTube search results</h3>
                 <div className="grid gap-3">
                   {(package_.trending_videos || []).map((video, i) => (
                     <a 
@@ -394,6 +705,7 @@ export default function Dashboard({ accessToken, isAnonymous, activePackageId, o
                     {copied === "story" ? "Copied" : "Copy story"}
                   </button>
                 </div>
+                <p className="text-xs text-gray-400">{storyWordCount} words · about {estimatedSpeechSeconds} sec at 150 words/min · target {package_.target_duration || 60} sec</p>
                 <div aria-live="polite" className="rounded-xl border border-[#2a2a3d] bg-[#0a0a0f] p-4">
                   <p className="text-sm font-medium text-white">
                     {canApproveStory
@@ -460,23 +772,24 @@ export default function Dashboard({ accessToken, isAnonymous, activePackageId, o
 
             {/* Characters tab */}
             {activeTab === "characters" && (
-              <div className="space-y-4">
-                <h3 className="font-semibold text-base">🎭 Character Reference Prompts</h3>
+              <div className="space-y-5">
+                <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-4 text-sm leading-relaxed text-amber-100">Image generation is not configured. The character cards below contain prompts for external image tools; no image files were created.</div>
+                <h3 className="text-lg font-semibold leading-snug">🎭 Character Reference Prompts</h3>
                 {(package_.characters || []).map((char, i) => (
-                  <div key={i} className="card p-5 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="font-semibold">{char.name}</div>
-                        <div className="flex gap-2 mt-1">
-                          <span className="tag">{char.role}</span>
-                          <span className="tag">🎤 {char.voice_style}</span>
+                  <div key={i} className="card min-w-0 space-y-4 p-4 sm:p-5">
+                    <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0 space-y-2">
+                        <div className="text-base font-semibold leading-snug">{char.name}</div>
+                        <div className="flex min-w-0 flex-wrap gap-2">
+                          <span className="tag inline-block max-w-full whitespace-normal break-words leading-5">{char.role}</span>
+                          <span className="tag inline-block max-w-full whitespace-normal break-words leading-5">🎤 {char.voice_style}</span>
                         </div>
                       </div>
-                      <button onClick={() => handleCopy(char.reference_prompt, `char-${i}`)} className="copy-btn">
+                      <button onClick={() => handleCopy(char.reference_prompt, `char-${i}`)} className="copy-btn w-full whitespace-nowrap sm:w-auto">
                         {copied === `char-${i}` ? "✓ Copied!" : "Copy Prompt"}
                       </button>
                     </div>
-                    <p className="text-sm leading-relaxed p-4 rounded-lg" style={{ background: "#0a0a0f", color: "#a78bfa", fontFamily: "monospace", fontSize: "13px" }}>
+                    <p className="min-w-0 whitespace-pre-wrap break-words rounded-lg border border-[#2a2a3d] p-4 text-sm leading-7" style={{ background: "#0a0a0f", color: "#c4b5fd", fontFamily: "monospace", overflowWrap: "anywhere" }}>
                       {char.reference_prompt}
                     </p>
                   </div>
@@ -548,7 +861,7 @@ export default function Dashboard({ accessToken, isAnonymous, activePackageId, o
                   {package_.thumbnail_prompt}
                 </div>
                 <p className="text-xs" style={{ color: "#6b7280" }}>
-                  💡 Use this prompt with your chosen image-generation tool. Set aspect ratio to <strong>9:16</strong> for vertical short-form content.
+                  Image generation is not configured. Copy this prompt to an external image tool; ClipCraft created text only. Set aspect ratio to <strong>9:16</strong> for vertical short-form content.
                 </p>
               </div>
             )}

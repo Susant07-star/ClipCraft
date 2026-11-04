@@ -1,0 +1,36 @@
+import type { VideoPackage } from "@/lib/types";
+
+export const SAMPLE_PACKAGE: VideoPackage = {
+  id: "clipcraft-labeled-sample",
+  status: "completed",
+  language: "English",
+  topic: "The lighthouse that kept one extra light",
+  target_duration: 30,
+  selected_platforms: ["youtube", "instagram"],
+  story: "Every night, Mira lit the old lighthouse for ships at sea. One evening, the lamp showed two beams, though she was alone. The second beam pointed inland, toward a village whose power had gone dark in a storm. Mira carried the lighthouse mirror to the hill and caught the moonlight. Window by window, a silver path crossed the village. At dawn, the fishermen returned safely. Mira looked back at the lighthouse. Its lamp was out, but one tiny light still blinked from the empty lantern room.",
+  virality_score: 8,
+  review_pass_count: 2,
+  current_story_version: 1,
+  approved_story_version: 1,
+  ai_review_approved: true,
+  story_approved: true,
+  reviewer_feedback: "Sample editorial feedback: the opening image is clear; preserve the quiet final reveal.",
+  story_versions: [],
+  workflow_state: { creator_topic: "The lighthouse that kept one extra light", genre: "Mystery", video_style: "Storybook illustration", target_duration: 30, selected_platforms: ["youtube", "instagram"], research_enabled: false, completed_steps: ["character_designer", "prompt_engineer", "seo_specialist"] },
+  trending_videos: [],
+  trend_scores: {},
+  research_brief: { status: "skipped", reason: "Sample package. No live research was run." },
+  research_trace: [],
+  research_errors: [],
+  characters: [{ name: "Mira", role: "Lighthouse keeper", voice_style: "Calm, warm, measured", reference_prompt: "A young lighthouse keeper with wind-tousled dark hair, a deep navy wool coat, brass lantern, and a thoughtful expression; hand-painted storybook illustration with moonlit blue shadows and silver highlights." }],
+  video_clips: [
+    { clip_number: 1, time_range: "0-10s", visual: "Wide establishing shot of a lonely lighthouse above a dark coast; Mira turns the brass lamp and sees two beams cross the mist.", character_voice: "MIRA, soft and curious: 'There should only be one.'", background_music: "Sparse piano with a low, gentle swell.", sound_effects: "Wind through grass, distant waves." },
+    { clip_number: 2, time_range: "10-20s", visual: "Tracking shot as Mira carries the lighthouse mirror uphill; a village below sits dark beneath heavy clouds.", character_voice: "MIRA, steady: 'Then let the moon help.'", background_music: "Warm strings enter softly.", sound_effects: "Boots on gravel, a loose shutter tapping." },
+    { clip_number: 3, time_range: "20-30s", visual: "The mirror sends a silver beam across village windows at dawn; Mira returns to an unlit lantern room where one tiny light blinks.", character_voice: "No dialogue in this clip.", background_music: "Piano resolves, then leaves one held note.", sound_effects: "Morning birds, one faint glass chime." },
+  ],
+  thumbnail_prompt: "Vertical 9:16 storybook illustration: a lone lighthouse keeper holds a brass mirror on a hill as a silver moonbeam reaches a dark village; a tiny unexplained light glows behind her, cinematic blue and silver palette, strong focal point, no text.",
+  seo_metadata: {
+    youtube: { title: "The Lighthouse Sent One More Light", description: "A keeper sees a second beam in the storm and discovers where the village needs her. A quiet short story about helping when the lights go out.", tags: ["short story", "lighthouse", "hopeful story"] },
+    instagram: { caption: "One extra light. One village waiting in the dark. 🌙 What do you think was blinking in the lantern room?", hashtags: ["shortstory", "storytelling", "lighthouse"] },
+  },
+};
