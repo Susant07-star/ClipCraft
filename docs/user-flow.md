@@ -22,6 +22,8 @@ The creator can request a revision or edit the story directly. Revisions are sav
 
 The creator explicitly approves the story. This is the gate for downstream production text. If the story is edited or revised after approval, approval and dependent assets must be refreshed for the new story version.
 
+The creator may enable **Auto-approve the AI story** before generation. When the AI review completes successfully, ClipCraft approves that generated version and starts the production package automatically. The option is off by default; stories that require creator review because the review limit was reached still remain available for manual review.
+
 ## 4. Review the production package
 
 After approval, ClipCraft prepares a package that can include:

@@ -20,6 +20,8 @@ ClipCraft Studio is an AI-powered short-form video content generation studio. It
 4. Approve the story. The app then prepares character descriptions, sequential video-generation prompts, a thumbnail prompt, and platform-specific metadata.
 5. Reopen saved work from the browser's private package history, copy the text assets, or export the package.
 
+The creator can optionally enable **Auto-approve the AI story** to skip the manual approval click after a successful AI review and immediately start production-package generation. Manual approval remains the default.
+
 See [the user flow](docs/user-flow.md) for the complete interaction and boundaries, [the deployment guide](docs/deployment.md) for hosting, and [the three-minute demo guide](docs/demo-script.md) for a timed recording plan.
 
 ## Highlights

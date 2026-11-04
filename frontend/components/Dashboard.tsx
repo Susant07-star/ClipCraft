@@ -164,6 +164,7 @@ export default function Dashboard({ accessToken, activePackageId, onSelectPackag
   const [targetDuration, setTargetDuration] = useState(60);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(["youtube", "tiktok", "instagram", "facebook"]);
   const [researchEnabled, setResearchEnabled] = useState(true);
+  const [autoApproveStory, setAutoApproveStory] = useState(false);
   const [showSample, setShowSample] = useState(false);
   const [jobStatus, setJobStatus] = useState<string>("idle"); // idle | queued | running | completed | failed
   const [loadedPackage, setPackage] = useState<VideoPackage | null>(null);
@@ -173,6 +174,7 @@ export default function Dashboard({ accessToken, activePackageId, onSelectPackag
   const [changeRequest, setChangeRequest] = useState("");
   const [workflowError, setWorkflowError] = useState("");
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const autoApprovePendingRef = useRef(false);
   const package_ = activePackageId && loadedPackage?.id === activePackageId
     ? loadedPackage
     : showSample && !activePackageId ? SAMPLE_PACKAGE : null;
@@ -250,9 +252,11 @@ export default function Dashboard({ accessToken, activePackageId, onSelectPackag
       setWorkflowError("");
       setJobStatus("queued");
       setPackage(null);
+      autoApprovePendingRef.current = autoApproveStory;
       const { job_id } = await generatePackage(accessToken, language, videoStyle, genre, topic.trim(), targetDuration, selectedPlatforms, researchEnabled);
       startPolling(job_id);
     } catch (error) {
+      autoApprovePendingRef.current = false;
       setJobStatus("failed");
       setWorkflowError(error instanceof Error ? error.message : "Could not start story generation.");
     }
@@ -294,7 +298,7 @@ export default function Dashboard({ accessToken, activePackageId, onSelectPackag
     URL.revokeObjectURL(blobUrl);
   };
 
-  const handleApproveStory = async () => {
+  const handleApproveStory = useCallback(async () => {
     if (!package_?.id) return;
     try {
       setWorkflowError("");
@@ -306,7 +310,20 @@ export default function Dashboard({ accessToken, activePackageId, onSelectPackag
     } catch (error) {
       setWorkflowError(error instanceof Error ? error.message : "Could not approve this story.");
     }
-  };
+  }, [accessToken, package_, startPolling]);
+
+  useEffect(() => {
+    if (
+      autoApprovePendingRef.current
+      && package_?.id
+      && ["awaiting_approval", "needs_creator_review"].includes(package_.status)
+    ) {
+      autoApprovePendingRef.current = false;
+      if (package_.status === "awaiting_approval") {
+        queueMicrotask(() => { void handleApproveStory(); });
+      }
+    }
+  }, [handleApproveStory, package_?.id, package_?.status]);
 
   const handleSubmitStory = async () => {
     if (!package_?.id) return;
@@ -504,7 +521,7 @@ export default function Dashboard({ accessToken, activePackageId, onSelectPackag
               className="min-h-36 w-full resize-y rounded-xl border border-[#2a2a3d] bg-[#0a0a0f] px-4 py-3 text-base leading-relaxed text-white focus:border-purple-500 focus:outline-none"
             />
             <span className="block text-xs leading-relaxed text-gray-400">
-              Optional: add any story details or tone/style direction. Leave blank and AI will create a fresh story using your selected genre, visual style, language, and duration. {topic.length}/1000
+              Genre and visual style are optional. Describe the tone or look you want here, or leave it blank and AI will decide from your other choices. {topic.length}/1000
             </span>
           </label>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -529,6 +546,13 @@ export default function Dashboard({ accessToken, activePackageId, onSelectPackag
           <label className="inline-flex min-h-11 items-center gap-3 text-sm text-gray-300">
             <input type="checkbox" checked={researchEnabled} disabled={isGenerating} onChange={(event) => setResearchEnabled(event.target.checked)} className="h-4 w-4 accent-purple-500" />
             Add YouTube and public web research to inform your story
+          </label>
+          <label className="flex min-h-11 items-start gap-3 text-sm text-gray-300">
+            <input type="checkbox" checked={autoApproveStory} disabled={isGenerating} onChange={(event) => setAutoApproveStory(event.target.checked)} className="mt-1 h-4 w-4 accent-purple-500" />
+            <span>
+              <span className="block font-medium text-gray-200">Auto-approve the AI story</span>
+              <span className="block text-xs leading-relaxed text-gray-400">Skip the approval step and immediately generate the production prompts when the review passes.</span>
+            </span>
           </label>
         </section>
         {/* Empty state */}
