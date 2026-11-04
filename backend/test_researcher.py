@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import MagicMock, call, patch
 
 from agents import researcher
+from agents import meta_research
 from graph.workflow import create_initial_state
 from main import GenerateRequest
 
@@ -99,6 +100,21 @@ class ResearcherTests(unittest.TestCase):
             "snippet": "Research context",
             "raw_source_item": source,
         }])
+
+    def test_placeholder_meta_credentials_are_treated_as_disabled(self):
+        with patch.dict(
+            meta_research.os.environ,
+            {
+                "META_ACCESS_TOKEN": "your_meta_graph_api_token",
+                "FACEBOOK_PAGE_ID": "your_facebook_page_id",
+                "INSTAGRAM_BUSINESS_ACCOUNT_ID": "your_instagram_business_account_id",
+            },
+            clear=False,
+        ):
+            result = meta_research.collect_owned_meta_evidence()
+
+        self.assertEqual(result["status"], "disabled")
+        self.assertEqual(result["errors"], [])
 
 
 if __name__ == "__main__":

@@ -9,6 +9,13 @@ from urllib.request import Request, urlopen
 
 GRAPH_API_VERSION = os.environ.get("META_GRAPH_API_VERSION", "v25.0")
 GRAPH_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+PLACEHOLDER_VALUES = {
+    "",
+    "your_meta_graph_api_token",
+    "your_page_access_token_optional",
+    "your_facebook_page_id",
+    "your_instagram_business_account_id",
+}
 
 
 def _graph_get(path: str, params: dict[str, str]) -> dict:
@@ -19,9 +26,20 @@ def _graph_get(path: str, params: dict[str, str]) -> dict:
 
 
 def _configured() -> bool:
+    access_token = os.environ.get("META_ACCESS_TOKEN", "").strip()
+    page_access_token = os.environ.get("META_PAGE_ACCESS_TOKEN", "").strip()
+    page_id = os.environ.get("FACEBOOK_PAGE_ID", "").strip()
+    instagram_id = os.environ.get("INSTAGRAM_BUSINESS_ACCOUNT_ID", "").strip()
     return bool(
-        os.environ.get("META_ACCESS_TOKEN")
-        and (os.environ.get("FACEBOOK_PAGE_ID") or os.environ.get("INSTAGRAM_BUSINESS_ACCOUNT_ID"))
+        access_token.lower() not in PLACEHOLDER_VALUES
+        and (
+            not page_access_token
+            or page_access_token.lower() not in PLACEHOLDER_VALUES
+        )
+        and (
+            page_id.lower() not in PLACEHOLDER_VALUES
+            or instagram_id.lower() not in PLACEHOLDER_VALUES
+        )
     )
 
 
