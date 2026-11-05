@@ -8,6 +8,18 @@ from main import GenerateRequest
 
 
 class ResearcherTests(unittest.TestCase):
+    def test_compact_research_query_does_not_send_the_full_story_brief(self):
+        topic = (
+            "A lonely lighthouse keeper discovers a hidden radio signal. "
+            "The signal contains a warning about an approaching storm and a missing ship."
+        )
+
+        query = researcher._compact_research_query(topic)
+
+        self.assertEqual(query, "A lonely lighthouse keeper discovers a hidden radio signal.")
+        self.assertLessEqual(len(query.split()), researcher.MAX_RESEARCH_QUERY_WORDS)
+        self.assertLessEqual(len(query), researcher.MAX_RESEARCH_QUERY_CHARS)
+
     def test_new_workflow_state_enables_research_by_default(self):
         self.assertTrue(create_initial_state()["research_enabled"])
         self.assertTrue(GenerateRequest(topic="A lighthouse mystery").research_enabled)
@@ -41,7 +53,7 @@ class ResearcherTests(unittest.TestCase):
             result = researcher.run_research(state)
 
         youtube_search.assert_called_once()
-        search_topic = " ".join(topic.split())[:120]
+        search_topic = researcher._compact_research_query(topic)
         self.assertEqual(youtube_search.call_args.args[0], [search_topic])
         self.assertEqual(
             web_search.call_args_list,

@@ -26,6 +26,24 @@ load_dotenv()
 
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
 YOUR_CHANNEL_ID = os.environ.get("YOUR_CHANNEL_ID", "UCb_5KqvTJQEVoT-8wI17cDA")
+MAX_RESEARCH_QUERY_WORDS = 12
+MAX_RESEARCH_QUERY_CHARS = 80
+
+
+def _compact_research_query(topic: str) -> str:
+    """Reduce a creator brief to a focused search phrase without changing the brief."""
+    normalized = " ".join(topic.split())
+    if not normalized:
+        return ""
+
+    first_sentence = re.split(r"(?<=[.!?])\s+", normalized, maxsplit=1)[0]
+    words = first_sentence.split()[:MAX_RESEARCH_QUERY_WORDS]
+    query = " ".join(words)
+    if len(query) <= MAX_RESEARCH_QUERY_CHARS:
+        return query
+
+    query = query[:MAX_RESEARCH_QUERY_CHARS].rsplit(" ", 1)[0]
+    return query or normalized[:MAX_RESEARCH_QUERY_CHARS].rstrip()
 
 
 # ─────────────────────────────────────────────
@@ -328,7 +346,7 @@ def run_research(state: dict) -> dict:
     youtube_base_query, trend_keywords = genre_queries.get(genre, genre_queries["Funny"])
     creator_topic = state.get("creator_topic", "").strip()
     if creator_topic:
-        search_topic = " ".join(creator_topic.split())[:120]
+        search_topic = _compact_research_query(creator_topic)
         youtube_base_query = search_topic
         trend_keywords = [search_topic]
     
@@ -397,7 +415,7 @@ def run_research(state: dict) -> dict:
 
     # 5. Get web context for the best keyword
     # Localize the web search to the chosen language for better context
-    web_query_topic = " ".join(best_keyword.split())[:120]
+    web_query_topic = _compact_research_query(best_keyword)
     web_query = f"{web_query_topic} latest trends"
     web_search_error_count = len(research_errors)
     if language != "English":
